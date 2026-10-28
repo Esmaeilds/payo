@@ -1,0 +1,23 @@
+{
+  "repository": "https://github.com/morethanwords/tweb",
+  "commit": "654ffd809aa402f31357db2a13c462b4e5b69a23",
+  "license": "GPL-3.0",
+  "mapping": {
+    "monitor": "devices.svg",
+    "reports": "statistics_chart.svg",
+    "book": "document.svg",
+    "bell": "bell_filled.svg",
+    "plus": "add.svg",
+    "refresh": "rotate_right.svg",
+    "help": "help.svg",
+    "close": "close.svg",
+    "healthy": "checkround.svg",
+    "warning": "warning_filled.svg",
+    "unreachable": "sendingerror_filled.svg",
+    "notice": "info.svg",
+    "unknown": "clock_filled.svg",
+    "zap": "boost_filled.svg",
+    "chevron": "arrow_next.svg",
+    "home": "apps.svg"
+  }
+}
