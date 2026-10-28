@@ -2,8 +2,6 @@
 
 A practical guide to Telegram alerts for public websites and API endpoints
 
-By Sam Jafari · Updated 28 October 2026
-
 ## What you are building
 
 A Telegram bot that checks a personal list of website URLs and public API endpoints every 10 minutes. It sends private alerts for service errors or repeated failures to receive a response, plus a daily uptime report. An optional Telegram Mini App makes the list and reports easier to manage.
