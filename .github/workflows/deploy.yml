@@ -53,11 +53,11 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       - name: Build production configuration
-        run: npx cf build
+        run: node scripts/run-cf-private.mjs build
       - name: Validate built output
-        run: npx cf deploy --prebuilt --mode production --dry-run
+        run: node scripts/run-cf-private.mjs deploy --prebuilt --mode production --dry-run
       - name: Deploy the validated build
-        run: npx cf deploy --prebuilt --mode production
+        run: node scripts/run-cf-private.mjs deploy --prebuilt --mode production
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       - name: Check Worker health and report schedule
