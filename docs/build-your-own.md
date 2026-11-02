@@ -74,7 +74,7 @@ Keep alert messages short: Payo, status, URL, response or last error, and detect
 
 ## 8. Add the daily uptime report
 
-Send each user's report at 12:00 noon in Asia/Tehran, covering the previous noon through the current noon. For the current Tehran offset, the UTC cron is 30 8 * * *; verify the conversion if timezone rules change.
+Send each user's report at 18:00 in Asia/Tehran, covering the previous 18:00 through the current 18:00. For the current Tehran offset, the UTC cron is 30 14 * * *; verify the conversion if timezone rules change.
 
 Uptime = HTTP 200 observations ÷ total recorded observations × 100. A full day contains 144 scheduled observations per endpoint at 10-minute intervals. For example, 143 successful observations out of 144 equals 99.31%.
 
@@ -118,7 +118,7 @@ Check each endpoint every 10 minutes. Use an 8-second timeout and at most three 
 
 Statuses: green for HTTP 200; blue for 100–199 and 201–299; yellow for 300–399, 400–499 except 408/429, HTTP 530 and invalid/excessive redirects; orange for 408/429 and 500–599 except 530; red only after three no-response attempts; gray before observations. Send private alerts only on entering orange or red or switching between them. Do not repeat unchanged categories or send green recovery alerts. Include the URL, cause and Tehran detection time.
 
-Send each user's daily uptime report at noon Asia/Tehran for the noon-to-noon window. Calculate successful HTTP 200 observations divided by recorded observations; 144 scheduled observations per full day. Identify partial coverage and deduplicate report delivery.
+Send each user's daily uptime report at 18:00 Asia/Tehran for the 18:00-to-18:00 window. Calculate successful HTTP 200 observations divided by recorded observations; 144 scheduled observations per full day. Identify partial coverage and deduplicate report delivery.
 
 Add an English Mini App at /app with Home, Reports and Learn; a native Telegram App menu button; server-side initData validation; Telegram theme support; and a short onboarding flow. Add /stats for my OWNER_ID only, showing registered users, users with monitors and the sum of every user's URL/API entries. Do not hardcode anyone else's identifiers or URLs.
 

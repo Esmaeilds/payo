@@ -51,7 +51,7 @@ function render(){
 }
 async function load(){snapshot=await api('dashboard');renderProfile();render();const initialTab=new URL(location.href).searchParams.get('tab');if(['home','monitors','reports','learn'].includes(initialTab))goTab(initialTab);$('notice').classList.add('hidden');$('connected').classList.remove('hidden');$('nav').classList.remove('hidden');if(!snapshot.onboardingComplete&&!introShown)showIntro();}
 
-const introSteps=[['⚡','Meet your quiet lookout','Add a website URL or API endpoint. Payo checks it every 10 minutes.'],['🔔','Only the alerts that matter','Orange HTTP errors alert immediately. No response? Payo retries twice, waiting 10 seconds each time, before a red alert. The same color won’t keep pinging.'],['📊','Uptime for every monitor','See each address’s uptime in Reports. Your daily summary arrives at 12:00 noon, Tehran time.']];
+const introSteps=[['⚡','Meet your quiet lookout','Add a website URL or API endpoint. Payo checks it every 10 minutes.'],['🔔','Only the alerts that matter','Orange HTTP errors alert immediately. No response? Payo retries twice, waiting 10 seconds each time, before a red alert. The same color won’t keep pinging.'],['📊','Uptime for every monitor','See each address’s uptime in Reports. Your daily summary arrives at 18:00, Tehran time.']];
 let introStep=0,introShown=false;
 function renderProfile(){
  const user=snapshot.user,avatar=$('userAvatar');$('profileName').textContent=user.first_name;avatar.replaceChildren();avatar.textContent=user.first_name.slice(0,1).toUpperCase();

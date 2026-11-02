@@ -10,7 +10,7 @@ A Telegram bot and Mini App for monitoring website URLs and public HTTP GET API 
 - Checks run every 10 minutes from Cloudflare, outside the monitored server.
 - No-response failures get two additional attempts, 10 seconds after each failure.
 - Orange service errors and confirmed red no-response results trigger private Telegram alerts on category changes. Unchanged incidents do not repeat; recovery notifications are disabled.
-- Daily reports arrive at noon Tehran time, with per-address sampled uptime and coverage.
+- Daily reports arrive at 18:00 Tehran time, with per-address sampled uptime and coverage.
 - The Mini App includes Home, Reports and Learn, and follows Telegram theme settings.
 - Owner-only `/stats` shows registered users, active users and the total number of URLs & APIs across all lists.
 
@@ -57,3 +57,7 @@ Cloudflare Free has shared resource limits. This repository does not promise unl
 This distribution is licensed under **GPL-3.0**, with the full license in [LICENSE](LICENSE). Telegram Web K SVG icons retain their upstream GPL-3.0 license and attribution in [vendor/telegram-web-k](vendor/telegram-web-k/NOTICE.md). Roboto is included under the [SIL Open Font License](licenses/Roboto-OFL.txt). Keep those notices when redistributing.
 
 Payo was built as an experiment in turning a real monitoring problem into a usable product with AI.
+
+## Report schedule transition
+
+Daily reports run at 18:00 Asia/Tehran (14:30 UTC), covering the previous 18:00 through the current 18:00. Existing noon-window counters are preserved in the legacy table, while new observations use a separate `daily_1800` table and report-delivery namespace. This prevents mixing the two window definitions or suppressing the first evening report because a noon report was already queued. The first evening window after upgrading has partial coverage; monitor lists and pending alert retries are retained.

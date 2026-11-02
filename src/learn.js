@@ -16,8 +16,8 @@ export const LEARN_TOPICS = {
 Each monitoring cycle starts with an HTTP GET from Cloudflare and follows up to 3 redirects. Only the final response determines the color. The same orange or red color does not repeat alerts. A change from orange to red or red to orange sends a new alert. Recovery and other colors do not send alerts.`,
   reports: `📊 Daily reports
 
-🕛 Every day at 12:00 noon, Tehran time.
-📅 Period: previous noon → today's noon.
+🕕 Every day at 18:00, Tehran time.
+📅 Period: previous 18:00 → today's 18:00.
 📈 Uptime = HTTP 200 checks ÷ recorded checks.
 Example: 143 successful checks out of 144 = 99.31%.
 
@@ -34,7 +34,7 @@ Same color: no repeated alerts.
 Any HTTP response stops the retries; its code determines the color.
 Other colors and green recovery: no alerts.
 
-Your daily summary still arrives at 12:00 noon, Tehran time.`,
+Your daily summary still arrives at 18:00, Tehran time.`,
 };
 
 export const LEARN_MENU = {

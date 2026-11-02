@@ -32,13 +32,13 @@ test('one down event, no repeated outage alerts, then recovery duration',()=>{
   assert.equal(transition(third.next,{ok:true,detail:'HTTP 200',ms:10},5000).event,null);
 });
 
-test('noon Tehran reporting window, interval and sample-based uptime',()=>{
+test('18:00 Tehran reporting window, interval and sample-based uptime',()=>{
   assert.equal(INTERVAL,10*60*1000);
-  assert.equal(periodKey(Date.parse('2026-10-25T08:29:59Z')),'2026-10-24');
-  assert.equal(periodKey(Date.parse('2026-10-25T08:30:00Z')),'2026-10-25');
+  assert.equal(periodKey(Date.parse('2026-10-25T14:29:59Z')),'2026-10-24');
+  assert.equal(periodKey(Date.parse('2026-10-25T14:30:00Z')),'2026-10-25');
   const {start,end}=periodBounds('2026-10-24');
-  assert.equal(new Date(start).toISOString(),'2026-10-24T08:30:00.000Z');
-  assert.equal(new Date(end).toISOString(),'2026-10-25T08:30:00.000Z');
+  assert.equal(new Date(start).toISOString(),'2026-10-24T14:30:00.000Z');
+  assert.equal(new Date(end).toISOString(),'2026-10-25T14:30:00.000Z');
   assert.equal(uptime(95,96),'98.96%');
   assert.equal(uptime(0,0),'No data');
   const text=reportText('2026-10-24',[{url:'https://a.example',up:1,total:2,outages:1},{url:'https://b.example',up:0,total:0,outages:0}]);

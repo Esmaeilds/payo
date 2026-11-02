@@ -2,10 +2,10 @@ export const INITIAL_URLS = [];
 export const INTERVAL = 600_000;
 export const MAX_TARGETS = Infinity;
 export const DAY = 86_400_000;
-// Report windows run noon-to-noon in Tehran (UTC+03:30).
-export function periodKey(ms) { return new Date(ms + 3.5*3600000 - 12*3600000).toISOString().slice(0,10); }
+// Report windows run 18:00-to-18:00 in Tehran (UTC+03:30).
+export function periodKey(ms) { return new Date(ms + 3.5*3600000 - 18*3600000).toISOString().slice(0,10); }
 export function periodBounds(key) {
-  const start=Date.parse(`${key}T12:00:00+03:30`);
+  const start=Date.parse(`${key}T18:00:00+03:30`);
   if(!/^\d{4}-\d{2}-\d{2}$/.test(key)||!Number.isFinite(start)) throw new Error('Invalid report period');
   return {start,end:start+DAY};
 }
