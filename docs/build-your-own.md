@@ -2,7 +2,7 @@
 
 A practical guide to Telegram alerts for public websites and API endpoints
 
-Updated 28 October 2026
+Updated 2 November 2026
 
 ## What you are building
 
@@ -108,6 +108,43 @@ Free hosting is not unlimited capacity. Cloudflare meters Worker requests, Durab
 
 Measure real daily usage before promising a supported number of URLs. Do not treat a planning estimate as a verified capacity limit. Ask the assistant for the final bot URL, Mini App URL, project source without secrets, deployment instructions and test results.
 
+## 13. Set up automatic deployment from GitHub
+
+The update path is: **open a pull request → review and test → merge into `main` → test and build again → deploy to Cloudflare**. Merging alone only updates GitHub unless a deployment workflow is configured.
+
+This repository includes [the deployment workflow](../.github/workflows/deploy.yml). Pull requests run tests and a dry-run build without production secrets. A successful push to `main` runs the production deployment. If tests or the build fail, deployment is skipped. A documentation-only merge also triggers this workflow.
+
+### Connect your own production Worker
+
+1. Use your own GitHub repository and Cloudflare account. Keep `package-lock.json` committed with registry URLs and integrity hashes; it must not point to local folders or symlinked tooling.
+2. In GitHub, open **Settings → Secrets and variables → Actions → New repository secret**.
+3. Create a dedicated Cloudflare deployment API token. Restrict it to the intended account and the permissions your deployment needs. For this Worker configuration, the token uses **Workers Scripts: Edit**, **Account Settings: Read**, and **Workers Observability: Edit**. Account-scoped permissions can affect other Workers in that account; they are not a restriction to one Worker. Choose an expiration and renew the token before it expires. Never use a Global API Key or paste the token into a chat.
+4. Store these five values as encrypted **repository Actions secrets**, using your own values:
+
+| Secret name | What to enter |
+| --- | --- |
+| `CLOUDFLARE_API_TOKEN` | The dedicated Cloudflare deployment token |
+| `CLOUDFLARE_ACCOUNT_ID` | Your production Cloudflare account ID |
+| `PAYO_WORKER_NAME` | The exact name of your existing production Worker |
+| `PAYO_OWNER_ID` | Your numeric Telegram user ID |
+| `PAYO_APP_URL` | Your existing Worker's HTTPS URL ending in `/app` |
+
+5. Keep `TELEGRAM_BOT_TOKEN`, `WEBHOOK_SECRET`, and `ADMIN_SECRET` in the existing **Cloudflare Worker Secrets**. They are not required as GitHub Actions secrets. Do not add their values to source files, Markdown, screenshots, artifacts, or logs.
+6. Keep the existing Worker name and Durable Object binding/class identities when updating a live installation. Deploying code to that same Worker retains its stored monitoring lists; creating a different Worker or changing storage identities can point the app at different data.
+7. Use Node.js **24.22.1** for this pinned project. The workflow installs dependencies with `npm ci`, runs `npm test`, and validates the build. Production settings come from the encrypted secrets rather than public configuration values. The deployment publishes the same production build that its dry run validated.
+
+### Verify the first automatic update
+
+1. Open a small pull request, such as a guide correction. On its **Checks** tab, confirm **Tests and build** succeeds. **Deploy production** is skipped for a pull request.
+2. Merge it into `main`. In **Actions → Test and deploy Payo**, open the new run for that merge commit.
+3. Confirm both **Tests and build** and **Deploy production** succeed. If a job fails, inspect its status before trying again; do not treat a successful merge as proof of deployment.
+4. The final job checks the public `/health` response and confirms the expected **18:00 Asia/Tehran** report settings. This is a liveness and configuration check, not proof that a scheduled monitoring cycle or a Telegram report was delivered. Also confirm the live app and the next scheduled report.
+5. If you added or renewed a missing Secret after a failed run, use **Actions → Test and deploy Payo → Run workflow** on `main` to try again.
+
+Production Cloudflare command output is suppressed because shortened settings can bypass GitHub's exact-value secret masking. Public logs show completion or failure summaries instead. Do not upload private build output or raw deployment logs as artifacts.
+
+GitHub stores source code, tests, documentation, and the workflow. Cloudflare Workers runs the bot and serves the Mini App; SQLite Durable Objects in Cloudflare store user lists and monitoring data. Telegram delivers chat messages and displays the Mini App; it does not host this application's monitoring code or database.
+
 ## Copy-and-paste build prompt
 
 Help me build my own public Telegram monitoring bot and Mini App using my own accounts. Use Cloudflare Workers Free, SQLite-backed Durable Objects and a free workers.dev URL. Do not buy a domain or enable paid services. If your environment cannot build or deploy, say so and provide the source and manual instructions.
@@ -122,7 +159,7 @@ Send each user's daily uptime report at 18:00 Asia/Tehran for the 18:00-to-18:00
 
 Add an English Mini App at /app with Home, Reports and Learn; a native Telegram App menu button; server-side initData validation; Telegram theme support; and a short onboarding flow. Add /stats for my OWNER_ID only, showing registered users, users with monitors and the sum of every user's URL/API entries. Do not hardcode anyone else's identifiers or URLs.
 
-Never ask me to paste tokens into the conversation. Explain secure direct entry of TELEGRAM_BOT_TOKEN, WEBHOOK_SECRET and ADMIN_SECRET. Verify webhook delivery, cross-user isolation, retries, alert deduplication, report accuracy, Mini App login and data persistence. Check current free-tier limits and actual consumption; do not promise unlimited capacity. Deliver the tested source and working links.
+Never ask me to paste tokens into the conversation. Explain secure direct entry of TELEGRAM_BOT_TOKEN, WEBHOOK_SECRET and ADMIN_SECRET. Verify webhook delivery, cross-user isolation, retries, alert deduplication, report accuracy, Mini App login and data persistence. Check current free-tier limits and actual consumption; do not promise unlimited capacity. Configure GitHub Actions to test pull requests without production secrets and deploy successful main-branch changes to my existing Worker. Use encrypted repository secrets for deployment settings and a dedicated Cloudflare API token; keep the bot token in Cloudflare. Preserve the existing Worker and storage identities, suppress private CLI output, document token renewal, and verify the deployment in Actions and the live /health response. Deliver the tested source and working links.
 
 ## Official references
 
@@ -136,3 +173,4 @@ Durable Objects pricing and allowances: https://developers.cloudflare.com/durabl
 
 Telegram Web K icons: https://github.com/morethanwords/tweb/tree/master/assets/icons
 
+Cloudflare CLI in CI: https://developers.cloudflare.com/cf/ci/
