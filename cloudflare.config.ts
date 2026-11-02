@@ -1,19 +1,22 @@
 import {defineConfig, bindings, exports as workerExports, triggers} from 'cf/config';
 
+// Production values are supplied by CI secrets, never committed to this repository.
+const workerName = process.env.PAYO_WORKER_NAME || 'payo-monitor';
+
 export default defineConfig({
-  accountId:'YOUR_CLOUDFLARE_ACCOUNT_ID',
+  accountId:process.env.CLOUDFLARE_ACCOUNT_ID || 'YOUR_CLOUDFLARE_ACCOUNT_ID',
   worker:{
-    name:'payo-monitor',
+    name:workerName,
     entrypoint:'./src/index.js',
     compatibilityDate:'2026-10-25',
     workersDev:true,
     previewUrls:false,
     env:{
-      APP_URL:bindings.text('https://payo-monitor.YOUR_SUBDOMAIN.workers.dev/app'),
-      OWNER_ID:bindings.text('YOUR_TELEGRAM_USER_ID'),
-      DIRECTORY:bindings.durableObject({worker:'payo-monitor',exportName:'Directory'}),
-      REGISTRY:bindings.durableObject({worker:'payo-monitor',exportName:'Registry'}),
-      TARGETS:bindings.durableObject({worker:'payo-monitor',exportName:'Target'}),
+      APP_URL:bindings.text(process.env.PAYO_APP_URL || 'https://payo-monitor.YOUR_SUBDOMAIN.workers.dev/app'),
+      OWNER_ID:bindings.text(process.env.PAYO_OWNER_ID || 'YOUR_TELEGRAM_USER_ID'),
+      DIRECTORY:bindings.durableObject({worker:workerName,exportName:'Directory'}),
+      REGISTRY:bindings.durableObject({worker:workerName,exportName:'Registry'}),
+      TARGETS:bindings.durableObject({worker:workerName,exportName:'Target'}),
       TELEGRAM_BOT_TOKEN:bindings.secret(),
       WEBHOOK_SECRET:bindings.secret(),
       ADMIN_SECRET:bindings.secret(),

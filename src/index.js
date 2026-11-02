@@ -365,7 +365,7 @@ export default {
         return json({user,targets,summary:dashboardSummary(targets),onboardingComplete:await reg.onboarded(),window:periodBounds(key)});
       }catch(e){return json({error:e.message},400);}
     }
-    if(path==='/health'&&request.method==='GET') return Response.json({service:'Payo ⚡️',ok:true});
+    if(path==='/health'&&request.method==='GET') return Response.json({service:'Payo ⚡️',ok:true,reportTime:'18:00',reportTimezone:'Asia/Tehran',reportCron:'30 14 * * *'});
     if(path.startsWith('/admin/')) {
       if(!await equalSecret(request.headers.get('Authorization'),`Bearer ${env.ADMIN_SECRET}`)||!env.ADMIN_SECRET) return new Response('Unauthorized',{status:401});
       if(path==='/admin/system'&&request.method==='GET')return Response.json(await directory(env).systemStatus(),{headers:{'Cache-Control':'no-store'}});

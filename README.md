@@ -61,3 +61,19 @@ Payo was built as an experiment in turning a real monitoring problem into a usab
 ## Report schedule transition
 
 Daily reports run at 18:00 Asia/Tehran (14:30 UTC), covering the previous 18:00 through the current 18:00. Existing noon-window counters are preserved in the legacy table, while new observations use a separate `daily_1800` table and report-delivery namespace. This prevents mixing the two window definitions or suppressing the first evening report because a noon report was already queued. The first evening window after upgrading has partial coverage; monitor lists and pending alert retries are retained.
+
+## Automatic deployment
+
+GitHub Actions runs tests and a dry-run build for pull requests and changes to `main`. Only a successful `main` run (or manual run on `main`) can deploy. The production job builds with private settings and publishes the same validated build. Deployment jobs do not overlap. A post-deploy liveness check confirms the Worker advertises the 18:00 Tehran report schedule; this does not prove Telegram delivery or scheduled-job success.
+
+Add these encrypted **repository Actions secrets** before enabling production:
+
+- `CLOUDFLARE_API_TOKEN`: a dedicated Cloudflare deployment token restricted to the intended account and required Worker deployment permissions. Do not use a Global API Key.
+- `CLOUDFLARE_ACCOUNT_ID`: the production account ID.
+- `PAYO_WORKER_NAME`: the exact existing Worker name. Reuse it to retain the production Durable Object namespaces.
+- `PAYO_OWNER_ID`: the owner's numeric Telegram user ID.
+- `PAYO_APP_URL`: the existing Worker's HTTPS `/app` URL.
+
+Keep `TELEGRAM_BOT_TOKEN`, `WEBHOOK_SECRET`, `ADMIN_SECRET` and the optional watchdog credential in the existing Cloudflare Worker Secrets. Do not place them in the workflow, repository, deployment artifacts or logs. The repository contains example fallbacks only. CI refuses to deploy if any required private setting is missing.
+
+Use Node.js 24.22.1, `npm ci`, `npm test`, and the pinned `cf` version. To retry a deployment after adding secrets, open Actions → Test and deploy Payo → Run workflow on `main`.

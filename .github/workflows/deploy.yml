@@ -1,0 +1,65 @@
+name: Test and deploy Payo
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CF_SEND_TELEMETRY: 'false'
+
+jobs:
+  test:
+    name: Tests and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24.22.1'
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+
+  deploy:
+    name: Deploy production
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: payo-production
+      cancel-in-progress: false
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      PAYO_WORKER_NAME: ${{ secrets.PAYO_WORKER_NAME }}
+      PAYO_OWNER_ID: ${{ secrets.PAYO_OWNER_ID }}
+      PAYO_APP_URL: ${{ secrets.PAYO_APP_URL }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24.22.1'
+          cache: npm
+      - run: npm ci
+      - name: Validate production settings
+        run: node scripts/check-deploy-env.mjs
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      - name: Build production configuration
+        run: npx cf build
+      - name: Validate built output
+        run: npx cf deploy --prebuilt --mode production --dry-run
+      - name: Deploy the validated build
+        run: npx cf deploy --prebuilt --mode production
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      - name: Check Worker health and report schedule
+        run: node scripts/verify-deployment.mjs
+
