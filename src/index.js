@@ -1,5 +1,5 @@
 import { DurableObject } from 'cloudflare:workers';
-import { dashboardSummary, INITIAL_URLS, INTERVAL, MAX_TARGETS, normalizeUrl, probe, transition, eventText, periodKey, periodBounds, reportText, DAY, viewState, shouldAlert } from './core.js';
+import { dashboardSummary, INITIAL_URLS, INTERVAL, MAX_TARGETS, normalizeUrl, probe, transition, eventText, periodKey, periodBounds, reportText, DAY, WEEK, weeklyPeriodKey, weeklyPeriodBounds, viewState, shouldAlert } from './core.js';
 import {iconLicense} from './icon-license.js';
 import {ICONS} from './icons.js';
 import {fontData,fontMime} from './font.js';
@@ -88,6 +88,7 @@ export class Registry extends DurableObject {
     if(existing && existing!==String(id))throw new Error('Owner mismatch');
     this.sql.exec("INSERT OR IGNORE INTO meta VALUES ('owner',?)",String(id));
     this.sql.exec("INSERT OR IGNORE INTO meta VALUES ('reports_begin_1800',?)",periodKey(Date.now()));
+    this.sql.exec("INSERT OR IGNORE INTO meta VALUES ('weekly_reports_begin',?)",weeklyPeriodKey(Date.now()));
   }
   list() {return this.sql.exec('SELECT id,url FROM targets ORDER BY rowid').toArray();}
   countTargets() {return this.sql.exec('SELECT COUNT(*) AS count FROM targets').toArray()[0].count;}
@@ -134,9 +135,9 @@ export class Registry extends DurableObject {
       }
     } finally {this.flushing=false;}
   }
-  async reportRows(key) {
+  async reportRows(key,weekly=false) {
     const items=this.list();const rows=[];
-    const results=await batches(items,async t=>{rows.push({url:t.url,...await target(this.config(),t.id).stats(key)});});
+    const results=await batches(items,async t=>{rows.push({url:t.url,...await (weekly?target(this.config(),t.id).weeklyStats(key):target(this.config(),t.id).stats(key))});});
     if(results.some(r=>r.status==='rejected'))throw new Error('Incomplete report data');
     return rows;
   }
@@ -157,6 +158,22 @@ export class Registry extends DurableObject {
       }
       await this.flush();
     } finally {this.reporting=false;}
+  }
+  async weekly(key) {
+    weeklyPeriodBounds(key);
+    const begin=this.sql.exec("SELECT value FROM meta WHERE key='weekly_reports_begin'").toArray()[0]?.value;
+    if(!begin||key<begin||this.weeklyReporting)return;
+    this.weeklyReporting=true;
+    try {
+      if(!this.sql.exec('SELECT value FROM meta WHERE key=?',`report:weekly:${key}`).toArray().length&&this.list().length){
+        const rows=await this.reportRows(key,true);
+        this.ctx.storage.transactionSync(()=>{
+          this.enqueue(reportText(key,rows,{weekly:true}));
+          this.sql.exec('INSERT OR IGNORE INTO meta VALUES (?,?)',`report:weekly:${key}`,'queued');
+        });
+      }
+      await this.flush();
+    } finally {this.weeklyReporting=false;}
   }
   async handle(update) {
     if(!this.accept(update.update_id)) return this.flush();
@@ -203,7 +220,7 @@ export class Registry extends DurableObject {
     }
     else if(command==='/start'||command==='/help'||text==='❔ Help') {
       this.pending('');
-      this.enqueue('Payo ⚡️\nMonitor website URLs and API endpoints.\n\nSend a public domain or URL to get started. Every 10 minutes I send an HTTP GET request. Orange HTTP service errors alert immediately. If no HTTP response arrives, I retry twice, waiting 10 seconds after each failure, and alert red only if all 3 attempts fail. Other colors and recovery are visible in Status and reports, without separate alerts.\n\n/add URL — add a website or API endpoint\n/list — your URLs and APIs\n/status — latest results\n/check — check targets due in the current interval\n/report — current reporting window\n/cancel — cancel\n/learn — colors, reports and alerts\n\nAnyone can use Payo ⚡️. Your list, alerts and reports are private to your Telegram account. Daily summary: 18:00, Tehran time.');
+      this.enqueue('Payo ⚡️\nMonitor website URLs and API endpoints.\n\nSend a public domain or URL to get started. Every 10 minutes I send an HTTP GET request. Orange HTTP service errors alert immediately. If no HTTP response arrives, I retry twice, waiting 10 seconds after each failure, and alert red only if all 3 attempts fail. Other colors and recovery are visible in Status and reports, without separate alerts.\n\n/add URL — add a website or API endpoint\n/list — your URLs and APIs\n/status — latest results\n/check — check targets due in the current interval\n/report — current reporting window\n/cancel — cancel\n/learn — colors, reports and alerts\n\nAnyone can use Payo ⚡️. Your list, alerts and reports are private to your Telegram account. Daily summary: 18:00, Tehran time. Weekly summary: Friday 00:00, Tehran time.');
       await telegram(this.config(),'sendMessage',{chat_id:this.owner(),text:'Tap App beside the message field to launch Payo directly. You can also use the button below.',reply_markup:{inline_keyboard:[[{text:'App',web_app:{url:this.env.APP_URL}}]]}});
     } else if(command==='/learn'||text==='📚 Learn') {
       this.pending('');
@@ -239,12 +256,14 @@ export class Target extends DurableObject {
     this.sql.exec('CREATE TABLE IF NOT EXISTS daily_1800 (period TEXT PRIMARY KEY,total INTEGER NOT NULL,up INTEGER NOT NULL,outages INTEGER NOT NULL)');
     const columns=new Set(this.sql.exec('PRAGMA table_info(daily_1800)').toArray().map(r=>r.name));
     for(const column of ['notice','warning','error','unreachable'])if(!columns.has(column))this.sql.exec(`ALTER TABLE daily_1800 ADD COLUMN ${column} INTEGER NOT NULL DEFAULT 0`);
+    this.sql.exec('CREATE TABLE IF NOT EXISTS weekly (period TEXT PRIMARY KEY,total INTEGER NOT NULL,up INTEGER NOT NULL,outages INTEGER NOT NULL,notice INTEGER NOT NULL,warning INTEGER NOT NULL,error INTEGER NOT NULL,unreachable INTEGER NOT NULL)');
     this.sql.exec('CREATE TABLE IF NOT EXISTS outbox (id INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT NOT NULL)');
   }
   status() {return JSON.parse(this.sql.exec('SELECT data FROM state WHERE id=1').toArray()[0]?.data || '{}');}
   save(data) {this.sql.exec('INSERT OR REPLACE INTO state VALUES (1,?)',JSON.stringify(data));}
   configure(url,ownerId=this.env.OWNER_ID) {const state=this.status();if(state.ownerId && state.ownerId!==String(ownerId))throw new Error('Owner mismatch');if(!state.url)this.save({url,ownerId:String(ownerId),enabled:true,status:'unknown'});else if(!state.ownerId)this.save({...state,ownerId:String(ownerId)});}
   stats(key) {periodBounds(key);return this.sql.exec('SELECT total,up,outages,notice,warning,error,unreachable FROM daily_1800 WHERE period=?',key).toArray()[0] || {total:0,up:0,outages:0,notice:0,warning:0,error:0,unreachable:0};}
+  weeklyStats(key) {weeklyPeriodBounds(key);return this.sql.exec('SELECT total,up,outages,notice,warning,error,unreachable FROM weekly WHERE period=?',key).toArray()[0] || {total:0,up:0,outages:0,notice:0,warning:0,error:0,unreachable:0};}
   async disable() {this.save({...this.status(),enabled:false,pendingCheck:null});this.sql.exec('DELETE FROM outbox');await this.ctx.storage.deleteAlarm();}
   async flush() {
     // Apply the current alert policy to queued notifications from older versions too.
@@ -297,6 +316,8 @@ export class Target extends DurableObject {
         this.save(next);
         this.sql.exec('INSERT INTO daily_1800 (period,total,up,outages,notice,warning,error,unreachable) VALUES (?,1,?,?,?,?,?,?) ON CONFLICT(period) DO UPDATE SET total=total+1,up=up+excluded.up,outages=outages+excluded.outages,notice=notice+excluded.notice,warning=warning+excluded.warning,error=error+excluded.error,unreachable=unreachable+excluded.unreachable',periodKey(next.checkedAt),result.ok?1:0,event?.newIncident?1:0,...['notice','warning','error','unreachable'].map(c=>next.category===c?1:0));
         this.sql.exec('DELETE FROM daily_1800 WHERE period < ?',periodKey(Date.now()-35*DAY));
+        this.sql.exec('INSERT INTO weekly (period,total,up,outages,notice,warning,error,unreachable) VALUES (?,1,?,?,?,?,?,?) ON CONFLICT(period) DO UPDATE SET total=total+1,up=up+excluded.up,outages=outages+excluded.outages,notice=notice+excluded.notice,warning=warning+excluded.warning,error=error+excluded.error,unreachable=unreachable+excluded.unreachable',weeklyPeriodKey(next.checkedAt),result.ok?1:0,event?.newIncident?1:0,...['notice','warning','error','unreachable'].map(c=>next.category===c?1:0));
+        this.sql.exec('DELETE FROM weekly WHERE period < ?',weeklyPeriodKey(Date.now()-8*WEEK));
         if(shouldAlert(event,next))this.sql.exec('INSERT INTO outbox(text) VALUES (?)',eventText(next.url,event));
       });
       await this.ctx.storage.deleteAlarm();
@@ -326,6 +347,7 @@ async function runChecks(env,scheduledTime=Date.now()) {
     // Evening reports are retried by each subsequent monitor cycle, with persistent deduplication.
     const reportKey=periodKey(scheduledTime-DAY);
     try{await reg.daily(reportKey);}catch{console.error(JSON.stringify({event:'daily_report_retry_pending'}));}
+    try{await reg.weekly(weeklyPeriodKey(scheduledTime-WEEK));}catch{console.error(JSON.stringify({event:'weekly_report_retry_pending'}));}
     await runUser(config);
   },2);
   await directory(env).recordCycle({ok:results.every(r=>r.status==='fulfilled'),failedUsers:results.filter(r=>r.status==='rejected').length});
@@ -365,7 +387,7 @@ export default {
         return json({user,targets,summary:dashboardSummary(targets),onboardingComplete:await reg.onboarded(),window:periodBounds(key)});
       }catch(e){return json({error:e.message},400);}
     }
-    if(path==='/health'&&request.method==='GET') return Response.json({service:'Payo ⚡️',ok:true,reportTime:'18:00',reportTimezone:'Asia/Tehran',reportCron:'30 14 * * *'});
+    if(path==='/health'&&request.method==='GET') return Response.json({service:'Payo ⚡️',ok:true,reportTime:'18:00',reportTimezone:'Asia/Tehran',reportCron:'30 14 * * *',weeklyReportTime:'Friday 00:00',weeklyReportTimezone:'Asia/Tehran',weeklyReportCron:'30 20 * * THU'});
     if(path.startsWith('/admin/')) {
       if(!await equalSecret(request.headers.get('Authorization'),`Bearer ${env.ADMIN_SECRET}`)||!env.ADMIN_SECRET) return new Response('Unauthorized',{status:401});
       if(path==='/admin/system'&&request.method==='GET')return Response.json(await directory(env).systemStatus(),{headers:{'Cache-Control':'no-store'}});
@@ -378,6 +400,7 @@ export default {
         for(const item of items) if(urls.includes(item.url)) {await registry(env).remove(item.id);removed.push(item.url);}
         return Response.json({removed,count:(await registry(env).list()).length});
       }
+      if(path==='/admin/weekly-report'&&request.method==='POST') {const {key,preview=false}=await request.json();weeklyPeriodBounds(key);if(preview)return Response.json(await registry(env).reportRows(key,true));await registry(env).weekly(key);return Response.json({ok:true});}
       if(path==='/admin/report'&&request.method==='POST') {const {key,preview=false}=await request.json();periodBounds(key);if(preview)return Response.json(await registry(env).reportRows(key));await registry(env).daily(key);return Response.json({ok:true});}
       if(path==='/admin/status'&&request.method==='GET') {
         const items=await registry(env).list();
