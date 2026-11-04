@@ -14,7 +14,7 @@ export const LEARN_TOPICS = {
 ⚪ Unknown: no recorded check yet.
 
 Each monitoring cycle starts with an HTTP GET from Cloudflare and follows up to 3 redirects. Only the final response determines the color. The same orange or red color does not repeat alerts. A change from orange to red or red to orange sends a new alert. Recovery and other colors do not send alerts.`,
-  reports: `📊 Daily reports
+  reports: `📊 Daily & weekly reports
 
 🕕 Every day at 18:00, Tehran time.
 📅 Period: previous 18:00 → today's 18:00.
@@ -24,7 +24,8 @@ Example: 143 successful checks out of 144 = 99.31%.
 10-minute checks = 144 per full day. Missing checks are excluded; the first report may be partial.
 
 Retries count as one recorded check per cycle.
-Current report previews the ongoing period.`,
+Weekly: Friday 00:00 Tehran, covering Friday 00:00 to the following Friday 00:00. Full week: 1,008 checks per address. The first week may be partial; missing checks are excluded.
+Current report previews the ongoing daily period.`,
   alerts: `🔔 Alerts
 
 Checks run every 10 minutes.
@@ -41,7 +42,7 @@ export const LEARN_MENU = {
   text:'📚 Learn about Payo ⚡️\nChoose a topic:',
   reply_markup:{inline_keyboard:[
     [{text:'🎨 Status colors',callback_data:'learn:colors'}],
-    [{text:'📊 Daily reports',callback_data:'learn:reports'}],
+    [{text:'📊 Daily & weekly reports',callback_data:'learn:reports'}],
     [{text:'🔔 When alerts are sent',callback_data:'learn:alerts'}],
   ]},
 };

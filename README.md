@@ -11,6 +11,7 @@ A Telegram bot and Mini App for monitoring website URLs and public HTTP GET API 
 - No-response failures get two additional attempts, 10 seconds after each failure.
 - Orange service errors and confirmed red no-response results trigger private Telegram alerts on category changes. Unchanged incidents do not repeat; recovery notifications are disabled.
 - Daily reports arrive at 18:00 Tehran time, with per-address sampled uptime and coverage.
+- Weekly reports arrive Friday at 00:00 Tehran (Thursday 20:30 UTC), covering the preceding Friday 00:00 through the current Friday 00:00.
 - The Mini App includes Home, Reports and Learn, and follows Telegram theme settings.
 - Owner-only `/stats` shows registered users, active users and the total number of URLs & APIs across all lists.
 
@@ -77,3 +78,9 @@ Add these encrypted **repository Actions secrets** before enabling production:
 Keep `TELEGRAM_BOT_TOKEN`, `WEBHOOK_SECRET`, `ADMIN_SECRET` and the optional watchdog credential in the existing Cloudflare Worker Secrets. Do not place them in the workflow, repository, deployment artifacts or logs. The repository contains example fallbacks only. CI refuses to deploy if any required private setting is missing.
 
 Use Node.js 24.22.1, `npm ci`, `npm test`, and the pinned `cf` version. To retry a deployment after adding secrets, open Actions → Test and deploy Payo → Run workflow on `main`.
+
+## Weekly reports
+
+Weekly counters are recorded independently of the 18:00 daily window. Each final monitoring observation increments both daily and weekly counters atomically; retries still count once. A full week contains 1,008 expected checks per address. Missing checks are excluded, and the first report after deployment may be partial. Historical weekly coverage is not fabricated from daily aggregates. Weekly counters are retained for eight weeks plus the active period. Reports include the endpoints currently on each user’s list.
+
+The weekly cron is `30 20 * * THU` (Thursday UTC = Friday 00:00 Asia/Tehran). Existing 10-minute cycles retry delivery with persistent queue/deduplication state. No additional endpoint requests are made for reporting. `/admin/weekly-report` supports the same protected preview/delivery pattern as daily reports.

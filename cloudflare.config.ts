@@ -23,7 +23,7 @@ export default defineConfig({
       WATCHDOG_PING_URL:bindings.secret(),
     },
     exports:{Directory:workerExports.durableObject({storage:'sqlite'}),Registry:workerExports.durableObject({storage:'sqlite'}),Target:workerExports.durableObject({storage:'sqlite'})},
-    triggers:[triggers.scheduled({schedule:'*/10 * * * *'}),triggers.scheduled({schedule:'30 14 * * *'})],
+    triggers:[triggers.scheduled({schedule:'*/10 * * * *'}),triggers.scheduled({schedule:'30 14 * * *'}),triggers.scheduled({schedule:'30 20 * * THU'})],
     observability:{enabled:true,headSamplingRate:0.1,redactQueryString:true,traces:{enabled:true,headSamplingRate:0.1}},
   },
 });

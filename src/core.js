@@ -2,6 +2,19 @@ export const INITIAL_URLS = [];
 export const INTERVAL = 600_000;
 export const MAX_TARGETS = Infinity;
 export const DAY = 86_400_000;
+export const WEEK = 7*DAY;
+// A week begins Friday 00:00 in Tehran, which is Thursday 20:30 UTC.
+export function weeklyPeriodKey(ms) {
+  const local=new Date(ms+3.5*3600000);
+  const daysSinceFriday=(local.getUTCDay()+2)%7;
+  return new Date(local.getTime()-daysSinceFriday*DAY).toISOString().slice(0,10);
+}
+export function weeklyPeriodBounds(key) {
+  const local=new Date(`${key}T00:00:00Z`);
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(key)||!Number.isFinite(local.getTime())||local.toISOString().slice(0,10)!==key||local.getUTCDay()!==5)throw new Error('Invalid weekly report period');
+  const start=Date.parse(`${key}T00:00:00+03:30`);
+  return {start,end:start+WEEK};
+}
 // Report windows run 18:00-to-18:00 in Tehran (UTC+03:30).
 export function periodKey(ms) { return new Date(ms + 3.5*3600000 - 18*3600000).toISOString().slice(0,10); }
 export function periodBounds(key) {
@@ -10,13 +23,14 @@ export function periodBounds(key) {
   return {start,end:start+DAY};
 }
 export function uptime(up,total) {return total ? `${(100*up/total).toFixed(2)}%` : 'No data';}
-export function reportText(key,rows) {
-  const {start,end}=periodBounds(key);
+export function reportText(key,rows,{weekly=false}={}) {
+  const {start,end}=weekly?weeklyPeriodBounds(key):periodBounds(key);
+  const expected=weekly?1008:144;
   const label=ms=>new Date(ms).toLocaleString('en-GB',{timeZone:'Asia/Tehran'});
   const total=rows.reduce((n,r)=>n+r.total,0),up=rows.reduce((n,r)=>n+r.up,0);
-  return `📊 Payo ⚡️ daily summary\nWebsite URLs & API endpoints\n${label(start)} to ${label(end)} (Tehran)\n\nObserved uptime: ${uptime(up,total)}\n`+
-    rows.map(r=>`\n${r.url}\nUptime: ${uptime(r.up,r.total)} | Successful: ${r.up}/${r.total}\nNew incidents: ${r.outages} | Coverage: ${r.total}/144 checks\n🟢 ${r.up} | 🔵 ${r.notice||0} | 🟡 ${r.warning||0} | 🟠 ${r.error||0} | 🔴 ${r.unreachable||0} | ⚪ ${Math.max(0,r.total-r.up-(r.notice||0)-(r.warning||0)-(r.error||0)-(r.unreachable||0))}`).join('\n')+
-    '\n\n🟢 HTTP 200 · 🔵 Informational · 🟡 Warning · 🟠 Service error · 🔴 No HTTP response · ⚪ Older unclassified checks\nUptime = HTTP 200 checks / all recorded checks. Missing checks are excluded, never assumed successful. Fewer than 144 checks means incomplete daily coverage. This is sampled availability from Cloudflare, not continuous uptime measurement.';
+  return `📊 Payo ⚡️ ${weekly?'weekly':'daily'} summary\nWebsite URLs & API endpoints\n${label(start)} to ${label(end)} (Tehran)\n\nObserved uptime: ${uptime(up,total)}\n`+
+    rows.map(r=>`\n${r.url}\nUptime: ${uptime(r.up,r.total)} | Successful: ${r.up}/${r.total}\nNew incidents: ${r.outages} | Coverage: ${r.total}/${expected} checks\n🟢 ${r.up} | 🔵 ${r.notice||0} | 🟡 ${r.warning||0} | 🟠 ${r.error||0} | 🔴 ${r.unreachable||0} | ⚪ ${Math.max(0,r.total-r.up-(r.notice||0)-(r.warning||0)-(r.error||0)-(r.unreachable||0))}`).join('\n')+
+    `\n\n🟢 HTTP 200 · 🔵 Informational · 🟡 Warning · 🟠 Service error · 🔴 No HTTP response · ⚪ Older unclassified checks\nUptime = HTTP 200 checks / all recorded checks. Missing checks are excluded, never assumed successful. Fewer than ${expected} checks means incomplete ${weekly?'weekly':'daily'} coverage. This is sampled availability from Cloudflare, not continuous uptime measurement.`;
 }
 export function normalizeUrl(input) {
   const text = input.trim();

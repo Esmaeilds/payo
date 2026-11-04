@@ -2,7 +2,7 @@
 
 A practical guide to Telegram alerts for public websites and API endpoints
 
-Updated 2 November 2026
+Updated 4 November 2026
 
 ## What you are building
 
@@ -80,6 +80,12 @@ Uptime = HTTP 200 observations ÷ total recorded observations × 100. A full day
 
 Identify partial coverage. Do not count missed checks or time before an endpoint was added as successful. This is sample-based availability, not a continuous measurement of outage duration. Persist report delivery state to avoid duplicate reports.
 
+### Weekly report
+
+Also send a weekly summary on **Friday at 00:00 Asia/Tehran**, covering the previous Friday 00:00 through the current Friday 00:00. This is the midnight between Thursday and Friday. The UTC cron is `30 20 * * THU` (Thursday at 20:30 UTC).
+
+Record weekly counters separately from daily counters: daily windows end at 18:00, so summing whole daily reports cannot give the exact Friday-midnight window. Count each final observation once in both windows, without issuing extra HTTP requests. A full week has 1,008 scheduled observations per address. Show per-address uptime, incident counts and sample coverage, excluding missing checks. The first week may be partial; do not invent earlier history. Persist weekly delivery and deduplication state, retry unsuccessful delivery on later monitoring cycles, and keep each report private to its owner.
+
 ## 9. Add the Telegram Mini App
 
 Serve the app at /app with Home, Reports and Learn. Home manages URLs and shows their latest status. Reports shows per-endpoint uptime. Learn briefly explains status colors, daily reports and alerts.
@@ -155,7 +161,7 @@ Check each endpoint every 10 minutes. Use an 8-second timeout and at most three 
 
 Statuses: green for HTTP 200; blue for 100–199 and 201–299; yellow for 300–399, 400–499 except 408/429, HTTP 530 and invalid/excessive redirects; orange for 408/429 and 500–599 except 530; red only after three no-response attempts; gray before observations. Send private alerts only on entering orange or red or switching between them. Do not repeat unchanged categories or send green recovery alerts. Include the URL, cause and Tehran detection time.
 
-Send each user's daily uptime report at 18:00 Asia/Tehran for the 18:00-to-18:00 window. Calculate successful HTTP 200 observations divided by recorded observations; 144 scheduled observations per full day. Identify partial coverage and deduplicate report delivery.
+Send each user's daily uptime report at 18:00 Asia/Tehran for the 18:00-to-18:00 window. Calculate successful HTTP 200 observations divided by recorded observations; 144 scheduled observations per full day. Identify partial coverage and deduplicate report delivery. Also send a private weekly report Friday at 00:00 Tehran, using independent Friday-to-Friday counters, 1,008 expected samples per full week, persistent delivery retries and deduplication. Do not backfill unknown history or make extra endpoint requests for the report.
 
 Add an English Mini App at /app with Home, Reports and Learn; a native Telegram App menu button; server-side initData validation; Telegram theme support; and a short onboarding flow. Add /stats for my OWNER_ID only, showing registered users, users with monitors and the sum of every user's URL/API entries. Do not hardcode anyone else's identifiers or URLs.
 
