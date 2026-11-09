@@ -84,3 +84,11 @@ Use Node.js 24.22.1, `npm ci`, `npm test`, and the pinned `cf` version. To retry
 Weekly counters are recorded independently of the 18:00 daily window. Each final monitoring observation increments both daily and weekly counters atomically; retries still count once. A full week contains 1,008 expected checks per address. Missing checks are excluded, and the first report after deployment may be partial. Historical weekly coverage is not fabricated from daily aggregates. Weekly counters are retained for eight weeks plus the active period. Reports include the endpoints currently on each user’s list.
 
 The weekly cron is `30 20 * * THU` (Thursday UTC = Friday 00:00 Asia/Tehran). Existing 10-minute cycles retry delivery with persistent queue/deduplication state. No additional endpoint requests are made for reporting. `/admin/weekly-report` supports the same protected preview/delivery pattern as daily reports.
+
+## Saved history and charts
+
+Home monitor details and Reports show saved response-time history, the last 30 scheduled slots and observed orange/red incidents. Reports supports 24 hours (individual checks), 7 days and 30 days (complete UTC-hour mean/max aggregates). Missing observations remain gaps; a no-response result has no measured HTTP latency. Touch a bar or chart to inspect a result. Times follow the device timezone; scheduled Telegram reports still use Tehran time.
+
+History starts with this release. Details are retained for seven days and hourly aggregates for thirty days, with housekeeping once per active target per UTC day. Daily/weekly report counters remain independent. No response bodies or additional endpoint requests are used. Viewing Reports loads history only for the selected monitor; Home does not fetch it in the background.
+
+The owner-only `/stats` command includes completed checks and attempts from currently listed monitors over the last 24 hours, additional retry attempts and retained sample counts. These are application counters, not Cloudflare billed usage: pending attempts, deleted targets, redirect hops and platform operations are excluded. They cannot establish a supported URL capacity. History adds storage writes and reads within the existing free-plan architecture; benchmark actual platform usage before scaling. No paid service or new binding is required.
