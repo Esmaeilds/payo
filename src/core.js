@@ -1,3 +1,4 @@
+import {matchesStatus,bodyMatches} from './monitor-settings.js';
 export const INITIAL_URLS = [];
 export const INTERVAL = 600_000;
 export const MAX_TARGETS = Infinity;
@@ -30,7 +31,7 @@ export function reportText(key,rows,{weekly=false}={}) {
   const total=rows.reduce((n,r)=>n+r.total,0),up=rows.reduce((n,r)=>n+r.up,0);
   return `📊 Payo ⚡️ ${weekly?'weekly':'daily'} summary\nWebsite URLs & API endpoints\n${label(start)} to ${label(end)} (Tehran)\n\nObserved uptime: ${uptime(up,total)}\n`+
     rows.map(r=>`\n${r.url}\nUptime: ${uptime(r.up,r.total)} | Successful: ${r.up}/${r.total}\nNew incidents: ${r.outages} | Coverage: ${r.total}/${expected} checks\n🟢 ${r.up} | 🔵 ${r.notice||0} | 🟡 ${r.warning||0} | 🟠 ${r.error||0} | 🔴 ${r.unreachable||0} | ⚪ ${Math.max(0,r.total-r.up-(r.notice||0)-(r.warning||0)-(r.error||0)-(r.unreachable||0))}`).join('\n')+
-    `\n\n🟢 HTTP 200 · 🔵 Informational · 🟡 Warning · 🟠 Service error · 🔴 No HTTP response · ⚪ Older unclassified checks\nUptime = HTTP 200 checks / all recorded checks. Missing checks are excluded, never assumed successful. Fewer than ${expected} checks means incomplete ${weekly?'weekly':'daily'} coverage. This is sampled availability from Cloudflare, not continuous uptime measurement.`;
+    `\n\n🟢 Expected response · 🔵 Informational · 🟡 Warning · 🟠 Service error · 🔴 No HTTP response · ⚪ Older unclassified checks\nUptime = successful configured checks / all recorded checks. Missing checks are excluded, never assumed successful. Fewer than ${expected} checks means incomplete ${weekly?'weekly':'daily'} coverage. This is sampled availability from Cloudflare, not continuous uptime measurement.`;
 }
 export function normalizeUrl(input) {
   const text = input.trim();
@@ -68,12 +69,12 @@ export function classify(httpStatus, reason='network') {
   return {category:'unreachable',...LEVELS.unreachable,httpStatus:null,receivedHTTP:false,reason,label,detail:label,ok:false};
 }
 export function viewState(state) {
-  if(state.category && state.category!=='unknown')return classify(state.httpStatus,state.reason||(state.receivedHTTP && !state.httpStatus?'redirect':'network'));
+  if(state.category && state.category!=='unknown'){const base=classify(state.httpStatus,state.reason||(state.receivedHTTP && !state.httpStatus?'redirect':'network'));return {...base,...LEVELS[state.category],category:state.category,ok:state.category==='healthy',detail:state.detail||base.detail,label:state.label||base.label};}
   if(!state.status||state.status==='unknown')return {category:'unknown',...LEVELS.unknown,label:'Not checked yet'};
   const match=state.detail?.match(/HTTP (\d+)/);
   return classify(match?Number(match[1]):state.status==='up'?200:null);
 }
-export async function probe(url, request = fetch, timeout = 8000) {
+export async function probe(url, request = fetch, timeout = 8000, options = {}) {
   const start = Date.now();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeout);
@@ -81,15 +82,19 @@ export async function probe(url, request = fetch, timeout = 8000) {
     let current = url;
     for (let redirect = 0; redirect <= 3; redirect++) {
       const response = await request(current, {method:'GET', redirect:'manual', signal:controller.signal,
-        headers:{'User-Agent':'PayoUptime/1.0', 'Cache-Control':'no-cache'}, cf:{cacheTtl:0,cacheEverything:false}});
-      await response.body?.cancel();
+        headers:{'User-Agent':'PayoUptime/1.0', 'Cache-Control':'no-cache',...options.headers}, cf:{cacheTtl:0,cacheEverything:false}});
       const location = response.headers.get('location');
       if ([301,302,303,307,308].includes(response.status) && location) {
+        await response.body?.cancel();
         if (redirect === 3) return {...classify(null,'redirect'),ms:Date.now()-start};
-        try{current = normalizeUrl(new URL(location,current).href);}catch{return {...classify(null,'redirect'),ms:Date.now()-start};}
+        try{const next=normalizeUrl(new URL(location,current).href);if(Object.keys(options.headers||{}).length&&new URL(next).origin!==new URL(url).origin)throw new Error('Cross-origin authenticated redirect');current=next;}catch{return {...classify(null,'redirect'),ms:Date.now()-start};}
         continue;
       }
-      return {...classify(response.status), ms:Date.now()-start};
+      let result=classify(response.status);
+      const accepted=matchesStatus(response.status,options.expectedStatus||'200');
+      if(accepted){const passed=options.assertion?await bodyMatches(response,options.assertion):true;if(!options.assertion)await response.body?.cancel();result={...result,category:passed?'healthy':'error',...LEVELS[passed?'healthy':'error'],ok:passed,reason:passed?null:'assertion',detail:passed?'HTTP '+response.status+' — Expected response received':'HTTP '+response.status+' — Response content did not match the configured condition'};}
+      else {await response.body?.cancel();if(response.status===200)result={...result,category:'warning',...LEVELS.warning,ok:false,detail:'HTTP 200 — Outside the configured success status'};}
+      return {...result,reason:result.reason||null,ms:Date.now()-start};
     }
   } catch(error) {
     const text=String(error?.message||'').toLowerCase();
@@ -107,17 +112,17 @@ export function transition(previous, result, now) {
     next.downSince=previous.downSince||now;
     event={kind:'down',at:now,detail:observed.detail,category:observed.category,icon:observed.icon,severity:observed.severity,newIncident:old.category==='unknown'||old.category==='healthy',previousCategory:old.category};
   } else if(up && old.category!=='healthy' && old.category!=='unknown') {
-    event={kind:'up',at:now,duration:Math.max(0,now-(previous.downSince||now))};
+    event={kind:'up',at:now,duration:Math.max(0,now-(previous.downSince||now)),previousCategory:old.category,httpStatus:observed.httpStatus};
     next.downSince=null;
   }
   return {next,event};
 }
-export function shouldAlert(event,state) {
-  return Boolean(event && ['error','unreachable'].includes(state.category));
+export function shouldAlert(event,state,recoveryAlerts=false) {
+  return Boolean(event && (['error','unreachable'].includes(state.category)||(recoveryAlerts&&event.kind==='up'&&['error','unreachable'].includes(event.previousCategory))));
 }
 export function eventText(url,e) {
   const when=new Date(e.at).toLocaleString('en-GB',{timeZone:'Asia/Tehran',hour12:false});
-  if(e.kind!=='down')return `🟢 Payo · Recovered\n\nURL: ${url}\nResponse: HTTP 200\nDetected: ${when} · Tehran`;
+  if(e.kind!=='down')return `🟢 Payo · Recovered\n\nURL: ${url}\nResponse: HTTP ${e.httpStatus||200}\nObserved incident: ${Math.round((e.duration||0)/60000)} min\nDetected: ${when} · Tehran`;
   const noResponse=e.category==='unreachable';
   return `${noResponse?'🔴 Payo · No response':'🟠 Payo · Service disruption'}\n\nURL: ${url}\n${noResponse?'Cause: No response after 3 attempts\nLast error: '+e.detail:'Response: '+e.detail}\nDetected: ${when} · Tehran`;
 }
@@ -125,5 +130,5 @@ export function eventText(url,e) {
 // Each monitored address contributes equally; unobserved addresses are excluded.
 export function dashboardSummary(rows){
  const observed=rows.filter(r=>Number.isFinite(r.stats?.total)&&r.stats.total>0);
- return {total:rows.length,healthy:rows.filter(r=>r.category==='healthy').length,observed:observed.length,averageUptime:observed.length?observed.reduce((sum,r)=>sum+100*r.stats.up/r.stats.total,0)/observed.length:null};
+ return {total:rows.length,healthy:rows.filter(r=>r.category==='healthy'&&!r.configurationError&&(!r.monitoringMode||r.monitoringMode==='active')).length,observed:observed.length,averageUptime:observed.length?observed.reduce((sum,r)=>sum+100*r.stats.up/r.stats.total,0)/observed.length:null};
 }

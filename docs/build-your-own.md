@@ -180,3 +180,11 @@ Durable Objects pricing and allowances: https://developers.cloudflare.com/durabl
 Telegram Web K icons: https://github.com/morethanwords/tweb/tree/master/assets/icons
 
 Cloudflare CLI in CI: https://developers.cloudflare.com/cf/ci/
+
+## Configure individual monitors
+
+In the Telegram Mini App, select a monitor in Home and open Settings. Keep HTTP 200 as the default or choose a final response code/range. Add a bounded text match or JSON scalar condition if needed; bodies over 64 KiB fail a content condition. Pause and Maintenance stop probes and do not create successful observations. Maintenance resumes at the first scheduled cycle after its end. Recovery alerts are optional and off by default.
+
+Use the API credentials section for HTTPS Bearer or custom Authorization/Accept/X- headers. Never put tokens in URLs, GitHub files, screenshots or chat messages. Saved headers are encrypted and are not returned to the App. Blank fields keep the existing set; entering new credentials replaces it. Removing credentials is explicit. The encryption key is derived from ADMIN_SECRET, so rotating that secret requires re-entering monitor credentials. Authenticated redirects remain on the original HTTPS origin. Only GET checks are supported.
+
+The owner can open Reports → System usage for private seven-day application trends. These are not provider quota readings. To obtain separate Cloudflare analytics, run scripts/cloudflare-usage.mjs with account and analytics-readable token environment variables, outside public logs. Validate available provider metrics and collect seven complete days before making capacity claims.
