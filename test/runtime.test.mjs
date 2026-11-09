@@ -161,6 +161,11 @@ test('Workers runtime: private access, seed, retries, outbox, dynamic list and p
     assert.equal(messages.filter(m=>String(m.chat_id)==='987'&&m.text?.startsWith('🔴')).length,1);
     assert(retries.targets.every(t=>t.stats.total===1),'one final sample per cycle');
     assert.equal(retries.targets.find(t=>t.url.includes('retry-recover')).stats.up,1);
+    const failedMonitor=retries.targets.find(t=>t.url.includes('retry-fail'));
+    const failedHistory=await (await mini(987,{action:'history',id:failedMonitor.id,range:'24h'})).json();
+    const failedSample=failedHistory.recent.find(p=>p.category==='unreachable');
+    assert.equal(failedHistory.summary.total,1,'three attempts produce one historical observation');
+    assert.equal(failedSample.attempts,3);assert.equal(failedSample.ms,null,'timeouts never become zero-latency points');
     const times=retryTimes.get('https://retry-fail.example/');assert(times[1]-times[0]>=17900);assert(times[2]-times[1]>=17900);
     await webhook('/check',987);assert.equal(calls.get('https://retry-fail.example/'),3,'same interval cannot restart retries');
 

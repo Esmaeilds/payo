@@ -8,6 +8,8 @@ import {miniHTML} from './mini.js';
 import {miniClient} from './mini-client.js';
 import {avatar} from './avatar.js';
 import {authenticate} from './mini-auth.js';
+import {historyUI} from './history-ui.js';
+import {historyView} from './history.js';
 import {LEARN_MENU, LEARN_TOPICS} from './learn.js';
 
 const keyboard = {keyboard:[['📊 Status','📋 My URLs & APIs'],['➕ Add URL / API','🗑 Remove'],['🔎 Check now','📈 Current report'],['📚 Learn','❔ Help']],resize_keyboard:true};
@@ -210,7 +212,10 @@ export class Registry extends DurableObject {
         const users=await directory(this.env).list();
         const counts=await batches(users,id=>this.env.REGISTRY.getByName(String(id)).countTargets());
         if(counts.some(result=>result.status!=='fulfilled'))this.enqueue('Stats are temporarily unavailable. Please try again.');
-        else {const values=counts.map(result=>result.value);this.enqueue('Payo ⚡️ · Bot stats\n\nTotal users: '+users.length+'\nActive users: '+values.filter(n=>n>0).length+'\nTotal URLs & APIs — all users: '+values.reduce((sum,n)=>sum+n,0)+'\n\nActive = users with at least one URL or API.\nTotal users = accounts registered with Payo.\nURLs shared by multiple users count once per user list.');}
+        else {const usageResults=await batches(users,async id=>{const config=forUser(this.env,id),items=await registry(config).list();const results=await batches(items,t=>target(config,t.id).usage());if(results.some(r=>r.status==='rejected'))throw new Error('Incomplete usage');return results.map(r=>r.value);});
+          const usage=usageResults.every(r=>r.status==='fulfilled')?usageResults.flatMap(r=>r.value).reduce((a,r)=>({checks:a.checks+r.checks,attempts:a.attempts+r.attempts,retainedSamples:a.retainedSamples+r.retainedSamples}),{checks:0,attempts:0,retainedSamples:0}):null;
+          const usageText=usage?'\n\nRecorded in the last 24 hours (current monitors):\nCompleted checks: '+usage.checks+'\nHTTP attempts: '+usage.attempts+'\nAdditional retry attempts: '+(usage.attempts-usage.checks)+'\nRetained detailed samples: '+usage.retainedSamples+'\nThese application counters exclude pending attempts, deleted monitors, redirects and platform overhead. They are not Cloudflare quota usage.':'\n\nUsage counters are temporarily unavailable.';
+          const values=counts.map(result=>result.value);this.enqueue('Payo ⚡️ · Bot stats\n\nTotal users: '+users.length+'\nActive users: '+values.filter(n=>n>0).length+'\nTotal URLs & APIs — all users: '+values.reduce((sum,n)=>sum+n,0)+usageText+'\n\nActive = users with at least one URL or API.\nTotal users = accounts registered with Payo.\nURLs shared by multiple users count once per user list.');}
       }
     }
     else if(command==='/cancel') {this.pending('');this.enqueue('Cancelled.');}
@@ -257,6 +262,8 @@ export class Target extends DurableObject {
     const columns=new Set(this.sql.exec('PRAGMA table_info(daily_1800)').toArray().map(r=>r.name));
     for(const column of ['notice','warning','error','unreachable'])if(!columns.has(column))this.sql.exec(`ALTER TABLE daily_1800 ADD COLUMN ${column} INTEGER NOT NULL DEFAULT 0`);
     this.sql.exec('CREATE TABLE IF NOT EXISTS weekly (period TEXT PRIMARY KEY,total INTEGER NOT NULL,up INTEGER NOT NULL,outages INTEGER NOT NULL,notice INTEGER NOT NULL,warning INTEGER NOT NULL,error INTEGER NOT NULL,unreachable INTEGER NOT NULL)');
+    this.sql.exec('CREATE TABLE IF NOT EXISTS observations (slot INTEGER PRIMARY KEY, at INTEGER NOT NULL, category TEXT NOT NULL, http INTEGER, ms INTEGER, attempts INTEGER NOT NULL, reason TEXT)');
+    this.sql.exec('CREATE TABLE IF NOT EXISTS hourly (hour INTEGER PRIMARY KEY,total INTEGER NOT NULL,up INTEGER NOT NULL,response_count INTEGER NOT NULL,response_sum REAL NOT NULL,response_max REAL,attempts INTEGER NOT NULL)');
     this.sql.exec('CREATE TABLE IF NOT EXISTS outbox (id INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT NOT NULL)');
   }
   status() {return JSON.parse(this.sql.exec('SELECT data FROM state WHERE id=1').toArray()[0]?.data || '{}');}
@@ -264,6 +271,18 @@ export class Target extends DurableObject {
   configure(url,ownerId=this.env.OWNER_ID) {const state=this.status();if(state.ownerId && state.ownerId!==String(ownerId))throw new Error('Owner mismatch');if(!state.url)this.save({url,ownerId:String(ownerId),enabled:true,status:'unknown'});else if(!state.ownerId)this.save({...state,ownerId:String(ownerId)});}
   stats(key) {periodBounds(key);return this.sql.exec('SELECT total,up,outages,notice,warning,error,unreachable FROM daily_1800 WHERE period=?',key).toArray()[0] || {total:0,up:0,outages:0,notice:0,warning:0,error:0,unreachable:0};}
   weeklyStats(key) {weeklyPeriodBounds(key);return this.sql.exec('SELECT total,up,outages,notice,warning,error,unreachable FROM weekly WHERE period=?',key).toArray()[0] || {total:0,up:0,outages:0,notice:0,warning:0,error:0,unreachable:0};}
+  history(range='24h',now=Date.now()) {
+    if(!['24h','7d','30d'].includes(range))throw new Error('Invalid history range');
+    const days=range==='24h'?1:range==='7d'?7:30;
+    const since=now-days*DAY;
+    const raw=this.sql.exec('SELECT * FROM observations WHERE slot>=? ORDER BY slot',Math.floor((now-7*DAY)/INTERVAL)).toArray();
+    const hourly=this.sql.exec('SELECT * FROM hourly WHERE hour>=? ORDER BY hour',Math.floor(since/3600000)).toArray();
+    return historyView(raw,hourly,range,now,this.status());
+  }
+  usage() {
+    const now=Date.now(),row=this.sql.exec('SELECT COUNT(*) AS checks,COALESCE(SUM(attempts),0) AS attempts FROM observations WHERE at>=?',now-DAY).toArray()[0];
+    return {...row,retainedSamples:this.sql.exec('SELECT COUNT(*) AS count FROM observations').toArray()[0].count};
+  }
   async disable() {this.save({...this.status(),enabled:false,pendingCheck:null});this.sql.exec('DELETE FROM outbox');await this.ctx.storage.deleteAlarm();}
   async flush() {
     // Apply the current alert policy to queued notifications from older versions too.
@@ -312,8 +331,15 @@ export class Target extends DurableObject {
       }
       const {next,event}=transition({...previous,pendingCheck:null},result,Date.now());
       next.attemptCount=attempts;next.firstAttemptAt=pending.firstAt;
+      const prune=next.historyPrunedDay!==Math.floor(next.checkedAt/DAY);
+      if(prune)next.historyPrunedDay=Math.floor(next.checkedAt/DAY);
       this.ctx.storage.transactionSync(()=>{
         this.save(next);
+        this.sql.exec('INSERT INTO observations VALUES (?,?,?,?,?,?,?)',Math.floor(pending.firstAt/INTERVAL),next.checkedAt,next.category,next.httpStatus||null,next.receivedHTTP&&Number.isFinite(next.ms)?next.ms:null,attempts,next.reason||null);
+        const response=next.receivedHTTP&&Number.isFinite(next.ms),ms=response?next.ms:0;
+        this.sql.exec('INSERT INTO hourly VALUES (?,1,?,?,?,?,?) ON CONFLICT(hour) DO UPDATE SET total=total+1,up=up+excluded.up,response_count=response_count+excluded.response_count,response_sum=response_sum+excluded.response_sum,response_max=MAX(COALESCE(response_max,0),COALESCE(excluded.response_max,0)),attempts=attempts+excluded.attempts',Math.floor(pending.firstAt/3600000),next.category==='healthy'?1:0,response?1:0,ms,response?ms:null,attempts);
+        if(prune){this.sql.exec('DELETE FROM observations WHERE slot<?',Math.floor((next.checkedAt-7*DAY)/INTERVAL));this.sql.exec('DELETE FROM hourly WHERE hour<?',Math.floor((next.checkedAt-30*DAY)/3600000));}
+
         this.sql.exec('INSERT INTO daily_1800 (period,total,up,outages,notice,warning,error,unreachable) VALUES (?,1,?,?,?,?,?,?) ON CONFLICT(period) DO UPDATE SET total=total+1,up=up+excluded.up,outages=outages+excluded.outages,notice=notice+excluded.notice,warning=warning+excluded.warning,error=error+excluded.error,unreachable=unreachable+excluded.unreachable',periodKey(next.checkedAt),result.ok?1:0,event?.newIncident?1:0,...['notice','warning','error','unreachable'].map(c=>next.category===c?1:0));
         this.sql.exec('DELETE FROM daily_1800 WHERE period < ?',periodKey(Date.now()-35*DAY));
         this.sql.exec('INSERT INTO weekly (period,total,up,outages,notice,warning,error,unreachable) VALUES (?,1,?,?,?,?,?,?) ON CONFLICT(period) DO UPDATE SET total=total+1,up=up+excluded.up,outages=outages+excluded.outages,notice=notice+excluded.notice,warning=warning+excluded.warning,error=error+excluded.error,unreachable=unreachable+excluded.unreachable',weeklyPeriodKey(next.checkedAt),result.ok?1:0,event?.newIncident?1:0,...['notice','warning','error','unreachable'].map(c=>next.category===c?1:0));
@@ -362,6 +388,7 @@ export default {
     if(path.startsWith('/app/icons/')&&path.endsWith('.svg')){const key=path.slice('/app/icons/'.length,-4);if(Object.hasOwn(ICONS,key))return new Response(ICONS[key],{headers:{'Content-Type':'image/svg+xml','Link':'</app/icons/LICENSE.txt>; rel="license"','Cache-Control':'public,max-age=86400','X-Content-Type-Options':'nosniff'}});return new Response('Not found',{status:404});}
     if(path==='/app/icons.js')return new Response('export const ICONS = '+JSON.stringify(Object.fromEntries(Object.entries(ICONS).map(([key,svg])=>[key,Array.from(svg).reduce((hash,char)=>Math.imul(hash^char.charCodeAt(0),16777619)>>>0,2166136261).toString(36)]))),{headers:{'Content-Type':'text/javascript','Cache-Control':'no-cache'}});
     if(path==='/app/theme.js')return new Response('export const themeTokens = '+themeTokens.toString(),{headers:{'Content-Type':'text/javascript','Cache-Control':'no-cache'}});
+    if(path==='/app/history-ui.js')return new Response(historyUI,{headers:{'Content-Type':'text/javascript; charset=utf-8','Cache-Control':'no-cache'}});
     if(path==='/app/client.js')return new Response(miniClient,{headers:{'Content-Type':'text/javascript; charset=utf-8','Cache-Control':'no-cache','X-Content-Type-Options':'nosniff'}});
     if(path==='/app/avatar.jpg')return new Response(Uint8Array.from(atob(avatar),c=>c.charCodeAt(0)),{headers:{'Content-Type':'image/jpeg','Cache-Control':'public,max-age=86400'}});
     if(path==='/app/api') {
@@ -373,10 +400,16 @@ export default {
       const reader=request.body?.getReader();if(!reader)return json({error:'Missing request'},400);
       let size=0,chunks=[];while(true){const {done,value}=await reader.read();if(done)break;size+=value.byteLength;if(size>4096){await reader.cancel();return json({error:'Request too large'},413);}chunks.push(value);}
       let body;try{const bytes=new Uint8Array(size);let offset=0;for(const c of chunks){bytes.set(c,offset);offset+=c.length;}body=JSON.parse(new TextDecoder().decode(bytes));}catch{return json({error:'Invalid request'},400);}
-      if(!['dashboard','add','remove','onboard'].includes(body?.action))return json({error:'Unknown action'},400);
+      if(!['dashboard','add','remove','onboard','history'].includes(body?.action))return json({error:'Unknown action'},400);
       const config=forUser(env,user.id),reg=registry(config);await directory(env).register(user.id);await reg.initialize(user.id);await reg.seed();
       ctx.waitUntil(directory(env).enableMenu().catch(()=>console.error(JSON.stringify({event:'mini_menu_pending'}))));
       try{
+        if(body.action==='history'){
+          if(typeof body.id!=='string'||!['24h','7d','30d'].includes(body.range))throw new Error('Invalid history request');
+          const item=(await reg.list()).find(t=>t.id===body.id);
+          if(!item)return json({error:'Monitor not found'},404);
+          return json(await target(config,item.id).history(body.range));
+        }
         if(body.action==='onboard'){await reg.completeOnboarding();return json({ok:true});}
         if(body.action==='add'){if(typeof body.url!=='string')throw new Error('Enter a URL or API endpoint.');return json({message:await reg.add(body.url)});}
         if(body.action==='remove'){if(typeof body.id!=='string'||body.id.length>50)throw new Error('Invalid monitor.');return json({message:await reg.remove(body.id)});}
