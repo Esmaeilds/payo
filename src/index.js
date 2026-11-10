@@ -291,7 +291,7 @@ export class Target extends DurableObject {
     this.ctx.storage.transactionSync(()=>{
       if(old.paused!==value.paused||old.maintenanceUntil!==value.maintenanceUntil){const now=Date.now();this.sql.exec('UPDATE suspensions SET ended=? WHERE ended IS NULL OR ended>?',now,now);const mode=monitoringMode(value);if(mode!=='active')this.sql.exec('INSERT OR REPLACE INTO suspensions VALUES (?,?,?)',now,mode==='paused'?null:value.maintenanceUntil,mode);this.sql.exec('DELETE FROM suspensions WHERE ended<?',now-35*DAY);}
       this.sql.exec('INSERT OR REPLACE INTO monitor_settings VALUES (1,?)',JSON.stringify(value));
-      this.save({...this.status(),pendingCheck:null,baselineAfterPause:monitoringMode(old)!=='active'||monitoringMode(value)!=='active'});
+      this.save({...this.status(),pendingCheck:null,baselineAfterPause:Boolean(this.status().baselineAfterPause)||monitoringMode(old)!=='active'||monitoringMode(value)!=='active'});
       this.sql.exec('DELETE FROM outbox');
     });
     await this.ctx.storage.deleteAlarm();return this.publicSettings();

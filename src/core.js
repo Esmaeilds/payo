@@ -85,15 +85,23 @@ export async function probe(url, request = fetch, timeout = 8000, options = {}) 
         headers:{'User-Agent':'PayoUptime/1.0', 'Cache-Control':'no-cache',...options.headers}, cf:{cacheTtl:0,cacheEverything:false}});
       const location = response.headers.get('location');
       if ([301,302,303,307,308].includes(response.status) && location) {
-        await response.body?.cancel();
+        await response.body?.cancel().catch(()=>{});
         if (redirect === 3) return {...classify(null,'redirect'),ms:Date.now()-start};
         try{const next=normalizeUrl(new URL(location,current).href);if(Object.keys(options.headers||{}).length&&new URL(next).origin!==new URL(url).origin)throw new Error('Cross-origin authenticated redirect');current=next;}catch{return {...classify(null,'redirect'),ms:Date.now()-start};}
         continue;
       }
       let result=classify(response.status);
       const accepted=matchesStatus(response.status,options.expectedStatus||'200');
-      if(accepted){const passed=options.assertion?await bodyMatches(response,options.assertion):true;if(!options.assertion)await response.body?.cancel();result={...result,category:passed?'healthy':'error',...LEVELS[passed?'healthy':'error'],ok:passed,reason:passed?null:'assertion',detail:passed?'HTTP '+response.status+' — Expected response received':'HTTP '+response.status+' — Response content did not match the configured condition'};}
-      else {await response.body?.cancel();if(response.status===200)result={...result,category:'warning',...LEVELS.warning,ok:false,detail:'HTTP 200 — Outside the configured success status'};}
+      if(accepted){
+        let passed=true;
+        if(options.assertion){
+          try{passed=await bodyMatches(response,options.assertion);}
+          // Headers arrived: a broken or timed-out body is a content failure, not no response.
+          catch{passed=false;}
+        }else await response.body?.cancel().catch(()=>{});
+        result={...result,category:passed?'healthy':'error',...LEVELS[passed?'healthy':'error'],ok:passed,reason:passed?null:'assertion',detail:passed?'HTTP '+response.status+' — Expected response received':'HTTP '+response.status+' — Response content did not match the configured condition'};
+      }
+      else {await response.body?.cancel().catch(()=>{});if(response.status===200)result={...result,category:'warning',...LEVELS.warning,ok:false,detail:'HTTP 200 — Outside the configured success status'};}
       return {...result,reason:result.reason||null,ms:Date.now()-start};
     }
   } catch(error) {
