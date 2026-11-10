@@ -1,6 +1,6 @@
 // Served as a module; only saved observations are read. No endpoint probes.
 export const historyUI=String.raw`
-const labels={healthy:'Healthy',notice:'Notice',warning:'Warning',error:'Service disruption',unreachable:'No response',unknown:'Unknown',missing:'No recorded check'};
+const labels={healthy:'Healthy',notice:'Notice',warning:'Warning',error:'Service disruption',unreachable:'No response',unknown:'Unknown',missing:'No recorded check',paused:'Paused',maintenance:'Maintenance'};
 const make=(tag,text,cls)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n;};
 const time=n=>new Date(n).toLocaleString(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
 const duration=n=>Number.isFinite(n)?Math.round(n)+' ms':'No response data';

@@ -167,7 +167,17 @@ test('Workers runtime: private access, seed, retries, outbox, dynamic list and p
     assert.equal(failedHistory.summary.total,1,'three attempts produce one historical observation');
     assert.equal(failedSample.attempts,3);assert.equal(failedSample.ms,null,'timeouts never become zero-latency points');
     const times=retryTimes.get('https://retry-fail.example/');assert(times[1]-times[0]>=17900);assert(times[2]-times[1]>=17900);
-    await webhook('/check',987);assert.equal(calls.get('https://retry-fail.example/'),3,'same interval cannot restart retries');
+    const bucketBefore=Math.floor(Date.now()/600000);
+    await webhook('/check',987);
+    const bucketAfter=Math.floor(Date.now()/600000),retryCalls=calls.get('https://retry-fail.example/');
+    // The real 54-second retry test can cross a legitimate ten-minute boundary.
+    if(bucketBefore===bucketAfter)assert.equal(retryCalls,bucketBefore===Math.floor(failedSample.at/600000)?3:4,'only a new interval may start another retry cycle');
+    else assert([3,4].includes(retryCalls),'a boundary permits at most one new cycle');
+    const duplicateBefore=Math.floor(Date.now()/600000);
+    await webhook('/check',987);
+    const duplicateAfter=Math.floor(Date.now()/600000),duplicateCalls=calls.get('https://retry-fail.example/');
+    if(duplicateBefore===duplicateAfter)assert.equal(duplicateCalls,duplicateBefore===Math.floor(failedSample.at/600000)?3:4,'a duplicate in the same interval cannot start an extra cycle');
+    else assert([3,4].includes(duplicateCalls),'crossing the boundary still permits only one additional cycle');
 
 
   } finally {await mf.dispose();await rm(saved,{recursive:true,force:true});}

@@ -8,6 +8,8 @@ import {miniHTML} from './mini.js';
 import {miniClient} from './mini-client.js';
 import {avatar} from './avatar.js';
 import {authenticate} from './mini-auth.js';
+import {defaults,normalizeSettings,validateCredentials,seal,unseal,monitoringMode} from './monitor-settings.js';
+import {settingsUI} from './settings-ui.js';
 import {historyUI} from './history-ui.js';
 import {historyView} from './history.js';
 import {LEARN_MENU, LEARN_TOPICS} from './learn.js';
@@ -225,7 +227,7 @@ export class Registry extends DurableObject {
     }
     else if(command==='/start'||command==='/help'||text==='❔ Help') {
       this.pending('');
-      this.enqueue('Payo ⚡️\nMonitor website URLs and API endpoints.\n\nSend a public domain or URL to get started. Every 10 minutes I send an HTTP GET request. Orange HTTP service errors alert immediately. If no HTTP response arrives, I retry twice, waiting 10 seconds after each failure, and alert red only if all 3 attempts fail. Other colors and recovery are visible in Status and reports, without separate alerts.\n\n/add URL — add a website or API endpoint\n/list — your URLs and APIs\n/status — latest results\n/check — check targets due in the current interval\n/report — current reporting window\n/cancel — cancel\n/learn — colors, reports and alerts\n\nAnyone can use Payo ⚡️. Your list, alerts and reports are private to your Telegram account. Daily summary: 18:00, Tehran time. Weekly summary: Friday 00:00, Tehran time.');
+      this.enqueue('Payo ⚡️\nMonitor website URLs and API endpoints.\n\nSend a public domain or URL to get started. Every 10 minutes I send an HTTP GET request. Orange HTTP service errors alert immediately. If no HTTP response arrives, I retry twice, waiting 10 seconds after each failure, and alert red only if all 3 attempts fail. Other colors are visible in Status and reports. Recovery alerts are off by default; enable them in App → monitor → Settings.\n\n/add URL — add a website or API endpoint\n/list — your URLs and APIs\n/status — latest results\n/check — check targets due in the current interval\n/report — current reporting window\n/cancel — cancel\n/learn — colors, reports and alerts\n\nIn App → monitor → Settings, choose expected status, text/JSON checks, Pause, Maintenance and HTTPS API credentials.\n\nAnyone can use Payo ⚡️. Your list, alerts and reports are private to your Telegram account. Daily summary: 18:00, Tehran time. Weekly summary: Friday 00:00, Tehran time.');
       await telegram(this.config(),'sendMessage',{chat_id:this.owner(),text:'Tap App beside the message field to launch Payo directly. You can also use the button below.',reply_markup:{inline_keyboard:[[{text:'App',web_app:{url:this.env.APP_URL}}]]}});
     } else if(command==='/learn'||text==='📚 Learn') {
       this.pending('');
@@ -240,7 +242,7 @@ export class Registry extends DurableObject {
       if(text==='🗑 Remove'&&items.length) {for(let i=0;i<items.length;i+=30) await telegram(this.config(),'sendMessage',{chat_id:this.owner(),text:'Choose a URL or API endpoint to remove:',reply_markup:{inline_keyboard:items.slice(i,i+30).map(t=>[{text:t.url.slice(0,60),callback_data:`delete:${t.id}`}])}});}
     } else if(command==='/status'||text==='📊 Status') {
       this.pending('');const items=this.list();
-      const reports=await Promise.all(items.map(async t=>{const s=await target(this.config(),t.id).status();const v=viewState(s);return `${v.icon} ${t.url}\nPriority: ${v.severity}\n${v.detail||v.label} · ${stamp(s.checkedAt)}${s.pendingCheck?'\nConfirming no response: '+s.pendingCheck.attempts+'/3 attempts completed.':''}`;}));
+      const reports=await Promise.all(items.map(async t=>{const s=await target(this.config(),t.id).status();const v=viewState(s);return `${s.monitoringMode==='paused'?'⏸️':s.monitoringMode==='maintenance'?'🛠️':v.icon} ${t.url}\nMode: ${s.monitoringMode}\nPriority: ${v.severity}\n${v.detail||v.label} · ${stamp(s.checkedAt)}${s.pendingCheck?'\nConfirming no response: '+s.pendingCheck.attempts+'/3 attempts completed.':''}`;}));
       this.enqueue(`📊 Latest status\n\n${reports.join('\n\n')}`);
     } else if(command==='/check'||text==='🔎 Check now') {
       this.pending('');this.enqueue('Check requested. Each URL or API endpoint is checked once per 10-minute interval. Open Status for results.');
@@ -262,38 +264,64 @@ export class Target extends DurableObject {
     const columns=new Set(this.sql.exec('PRAGMA table_info(daily_1800)').toArray().map(r=>r.name));
     for(const column of ['notice','warning','error','unreachable'])if(!columns.has(column))this.sql.exec(`ALTER TABLE daily_1800 ADD COLUMN ${column} INTEGER NOT NULL DEFAULT 0`);
     this.sql.exec('CREATE TABLE IF NOT EXISTS weekly (period TEXT PRIMARY KEY,total INTEGER NOT NULL,up INTEGER NOT NULL,outages INTEGER NOT NULL,notice INTEGER NOT NULL,warning INTEGER NOT NULL,error INTEGER NOT NULL,unreachable INTEGER NOT NULL)');
+    this.sql.exec('CREATE TABLE IF NOT EXISTS suspensions (started INTEGER PRIMARY KEY, ended INTEGER, kind TEXT NOT NULL)');
+    this.sql.exec('CREATE TABLE IF NOT EXISTS monitor_settings (id INTEGER PRIMARY KEY CHECK(id=1), data TEXT NOT NULL)');
     this.sql.exec('CREATE TABLE IF NOT EXISTS observations (slot INTEGER PRIMARY KEY, at INTEGER NOT NULL, category TEXT NOT NULL, http INTEGER, ms INTEGER, attempts INTEGER NOT NULL, reason TEXT)');
     this.sql.exec('CREATE TABLE IF NOT EXISTS hourly (hour INTEGER PRIMARY KEY,total INTEGER NOT NULL,up INTEGER NOT NULL,response_count INTEGER NOT NULL,response_sum REAL NOT NULL,response_max REAL,attempts INTEGER NOT NULL)');
     this.sql.exec('CREATE TABLE IF NOT EXISTS outbox (id INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT NOT NULL)');
   }
-  status() {return JSON.parse(this.sql.exec('SELECT data FROM state WHERE id=1').toArray()[0]?.data || '{}');}
+  status() {const data=JSON.parse(this.sql.exec('SELECT data FROM state WHERE id=1').toArray()[0]?.data || '{}');return {...data,monitoringMode:monitoringMode(this.settings())};}
   save(data) {this.sql.exec('INSERT OR REPLACE INTO state VALUES (1,?)',JSON.stringify(data));}
   configure(url,ownerId=this.env.OWNER_ID) {const state=this.status();if(state.ownerId && state.ownerId!==String(ownerId))throw new Error('Owner mismatch');if(!state.url)this.save({url,ownerId:String(ownerId),enabled:true,status:'unknown'});else if(!state.ownerId)this.save({...state,ownerId:String(ownerId)});}
   stats(key) {periodBounds(key);return this.sql.exec('SELECT total,up,outages,notice,warning,error,unreachable FROM daily_1800 WHERE period=?',key).toArray()[0] || {total:0,up:0,outages:0,notice:0,warning:0,error:0,unreachable:0};}
   weeklyStats(key) {weeklyPeriodBounds(key);return this.sql.exec('SELECT total,up,outages,notice,warning,error,unreachable FROM weekly WHERE period=?',key).toArray()[0] || {total:0,up:0,outages:0,notice:0,warning:0,error:0,unreachable:0};}
+  settingsRaw(){return this.sql.exec('SELECT data FROM monitor_settings WHERE id=1').toArray()[0]?.data||'{}';}
+  settings(){return {...defaults,...JSON.parse(this.settingsRaw())};}
+  publicSettings(){const {credentials,revision,...settings}=this.settings();return {...settings,hasCredentials:Boolean(credentials),mode:monitoringMode(settings)};}
+  async updateSettings(input){
+    const before=this.settingsRaw(),old=this.settings(),state=this.status();
+    const value=normalizeSettings(input,old);
+    if(input.clearCredentials===true)value.credentials=null;
+    if(Object.hasOwn(input,'bearerToken')||Object.hasOwn(input,'headers')){
+      if(new URL(state.url).protocol!=='https:')throw new Error('Credentials require an HTTPS monitor.');
+      const headers=validateCredentials(input);value.credentials=Object.keys(headers).length?await seal(headers,this.env.ADMIN_SECRET,String(this.ctx.id)+':'+state.ownerId+':'+state.url):null;
+    }
+    if(this.settingsRaw()!==before)throw new Error('Settings changed. Reload and try again.');
+    value.revision=crypto.randomUUID();
+    this.ctx.storage.transactionSync(()=>{
+      if(old.paused!==value.paused||old.maintenanceUntil!==value.maintenanceUntil){const now=Date.now();this.sql.exec('UPDATE suspensions SET ended=? WHERE ended IS NULL OR ended>?',now,now);const mode=monitoringMode(value);if(mode!=='active')this.sql.exec('INSERT OR REPLACE INTO suspensions VALUES (?,?,?)',now,mode==='paused'?null:value.maintenanceUntil,mode);this.sql.exec('DELETE FROM suspensions WHERE ended<?',now-35*DAY);}
+      this.sql.exec('INSERT OR REPLACE INTO monitor_settings VALUES (1,?)',JSON.stringify(value));
+      this.save({...this.status(),pendingCheck:null,baselineAfterPause:Boolean(this.status().baselineAfterPause)||monitoringMode(old)!=='active'||monitoringMode(value)!=='active'});
+      this.sql.exec('DELETE FROM outbox');
+    });
+    await this.ctx.storage.deleteAlarm();return this.publicSettings();
+  }
   history(range='24h',now=Date.now()) {
     if(!['24h','7d','30d'].includes(range))throw new Error('Invalid history range');
     const days=range==='24h'?1:range==='7d'?7:30;
     const since=now-days*DAY;
     const raw=this.sql.exec('SELECT * FROM observations WHERE slot>=? ORDER BY slot',Math.floor((now-7*DAY)/INTERVAL)).toArray();
     const hourly=this.sql.exec('SELECT * FROM hourly WHERE hour>=? ORDER BY hour',Math.floor(since/3600000)).toArray();
-    return historyView(raw,hourly,range,now,this.status());
+    const view=historyView(raw,hourly,range,now,this.status()),suspensions=this.sql.exec('SELECT * FROM suspensions WHERE ended IS NULL OR ended>=? ORDER BY started DESC LIMIT 200',now-7*DAY).toArray();
+    for(const point of [...view.recent,...view.points])if(point.category==='missing'){const suspended=suspensions.find(s=>s.started<=point.at&&(s.ended===null||point.at<s.ended));if(suspended)point.category=suspended.kind;}
+    return view;
   }
   usage() {
     const now=Date.now(),row=this.sql.exec('SELECT COUNT(*) AS checks,COALESCE(SUM(attempts),0) AS attempts FROM observations WHERE at>=?',now-DAY).toArray()[0];
-    return {...row,retainedSamples:this.sql.exec('SELECT COUNT(*) AS count FROM observations').toArray()[0].count};
+    const daily=this.sql.exec('SELECT CAST(hour/24 AS INTEGER) AS day,SUM(total) AS checks,SUM(attempts) AS attempts,SUM(up) AS successful FROM hourly WHERE hour>=? GROUP BY day ORDER BY day',Math.floor((now-7*DAY)/3600000)).toArray();
+    return {...row,daily,retainedSamples:this.sql.exec('SELECT COUNT(*) AS count FROM observations').toArray()[0].count};
   }
   async disable() {this.save({...this.status(),enabled:false,pendingCheck:null});this.sql.exec('DELETE FROM outbox');await this.ctx.storage.deleteAlarm();}
   async flush() {
     // Apply the current alert policy to queued notifications from older versions too.
-    this.sql.exec("DELETE FROM outbox WHERE substr(text,1,1) NOT IN ('🟠','🔴')");
+    if(!this.settings().recoveryAlerts)this.sql.exec("DELETE FROM outbox WHERE substr(text,1,1) NOT IN ('🟠','🔴')");
     for(const row of this.sql.exec('SELECT * FROM outbox ORDER BY id LIMIT 4').toArray()) {
       await send(forUser(this.env,this.status().ownerId||this.env.OWNER_ID),row.text);this.sql.exec('DELETE FROM outbox WHERE id=?',row.id);
     }
   }
   async check() {
     if(this.running)return {skipped:true};
-    let previous=this.status();if(!previous.enabled)return {skipped:true};
+    let previous=this.status();if(!previous.enabled||monitoringMode(this.settings())!=='active')return {skipped:true};
     if(previous.pendingCheck){
       if(await this.ctx.storage.getAlarm()===null)await this.ctx.storage.setAlarm(Math.max(Date.now(),previous.pendingCheck.retryAt||0));
       return {pending:true};
@@ -306,7 +334,7 @@ export class Target extends DurableObject {
   }
   async alarm() {
     const state=this.status();
-    if(!state.enabled)return;
+    if(!state.enabled||monitoringMode(this.settings())!=='active')return;
     if(!state.pendingCheck){await this.flush();return;}
     if(this.running){await this.ctx.storage.setAlarm(Date.now()+10000);return;}
     if(state.pendingCheck.retryAt>Date.now()){await this.ctx.storage.setAlarm(state.pendingCheck.retryAt);return;}
@@ -318,10 +346,15 @@ export class Target extends DurableObject {
     try{
       let previous=this.status();const pending=previous.pendingCheck;
       if(!previous.enabled||!pending)return {skipped:true};
-      const result=await probe(previous.url);
+      const settings=this.settings(),revision=settings.revision;
+      if(monitoringMode(settings)!=='active')return {skipped:true};
+      let headers={};
+      if(settings.credentials){try{headers=await unseal(settings.credentials,this.env.ADMIN_SECRET,String(this.ctx.id)+':'+previous.ownerId+':'+previous.url);}catch{this.save({...this.status(),pendingCheck:null,configurationError:'Re-enter stored credentials in Settings.'});return {configurationError:true};}}
+      if(this.settings().revision!==revision||this.status().pendingCheck?.id!==pending.id)return {skipped:true};
+      const result=await probe(previous.url,fetch,8000,{...settings,headers});
       // Removal or another completed cycle must suppress late results.
       previous=this.status();
-      if(!previous.enabled||previous.pendingCheck?.id!==pending.id)return {skipped:true};
+      if(!previous.enabled||previous.pendingCheck?.id!==pending.id||this.settings().revision!==revision||monitoringMode(this.settings())!=='active')return {skipped:true};
       const attempts=pending.attempts+1;
       if(result.category==='unreachable'&&attempts<3){
         const retryAt=Date.now()+10000;
@@ -329,7 +362,7 @@ export class Target extends DurableObject {
         await this.ctx.storage.setAlarm(retryAt);
         return {pending:true,attempts};
       }
-      const {next,event}=transition({...previous,pendingCheck:null},result,Date.now());
+      const {next,event}=transition({...previous,pendingCheck:null,...(previous.baselineAfterPause?{category:'unknown',status:'unknown',downSince:null}:{}),baselineAfterPause:false,configurationError:null},result,Date.now());
       next.attemptCount=attempts;next.firstAttemptAt=pending.firstAt;
       const prune=next.historyPrunedDay!==Math.floor(next.checkedAt/DAY);
       if(prune)next.historyPrunedDay=Math.floor(next.checkedAt/DAY);
@@ -344,13 +377,19 @@ export class Target extends DurableObject {
         this.sql.exec('DELETE FROM daily_1800 WHERE period < ?',periodKey(Date.now()-35*DAY));
         this.sql.exec('INSERT INTO weekly (period,total,up,outages,notice,warning,error,unreachable) VALUES (?,1,?,?,?,?,?,?) ON CONFLICT(period) DO UPDATE SET total=total+1,up=up+excluded.up,outages=outages+excluded.outages,notice=notice+excluded.notice,warning=warning+excluded.warning,error=error+excluded.error,unreachable=unreachable+excluded.unreachable',weeklyPeriodKey(next.checkedAt),result.ok?1:0,event?.newIncident?1:0,...['notice','warning','error','unreachable'].map(c=>next.category===c?1:0));
         this.sql.exec('DELETE FROM weekly WHERE period < ?',weeklyPeriodKey(Date.now()-8*WEEK));
-        if(shouldAlert(event,next))this.sql.exec('INSERT INTO outbox(text) VALUES (?)',eventText(next.url,event));
+        if(shouldAlert(event,next,settings.recoveryAlerts))this.sql.exec('INSERT INTO outbox(text) VALUES (?)',eventText(next.url,event));
       });
       await this.ctx.storage.deleteAlarm();
       await this.flush();return {status:next.status,detail:next.detail};
     }finally{this.running=false;}
   }
 
+}
+async function systemUsage(env){
+  const users=await directory(env).list(),daily=new Map();let targets=0,active=0,retainedSamples=0;
+  const results=await batches(users,async id=>{const config=forUser(env,id),items=await registry(config).list();targets+=items.length;if(items.length)active++;const metrics=await batches(items,t=>target(config,t.id).usage());if(metrics.some(r=>r.status==='rejected'))throw new Error('Usage unavailable');for(const {value} of metrics){retainedSamples+=value.retainedSamples;for(const row of value.daily){const old=daily.get(row.day)||{day:row.day,checks:0,attempts:0,successful:0};for(const key of ['checks','attempts','successful'])old[key]+=row[key];daily.set(row.day,old);}}});
+  if(results.some(r=>r.status==='rejected'))throw new Error('Usage unavailable');
+  return {users:users.length,active,targets,retainedSamples,daily:[...daily.values()].sort((a,b)=>a.day-b.day),note:'Application measurements for current monitors. UTC dates, partial days included. Not Cloudflare billing or quota usage; pending attempts, redirect hops, deleted monitors and platform overhead are excluded. Collect at least seven full days and compare with Cloudflare analytics before changing capacity or interval.'};
 }
 async function runUser(env) {
   const reg=registry(env);await reg.initialize(env.OWNER_ID);await reg.seed();
@@ -361,7 +400,7 @@ async function runUser(env) {
   try{await reg.flush();}catch{console.error(JSON.stringify({event:'telegram_retry_pending'}));}
   if(failed) {console.error(JSON.stringify({event:'checks_incomplete',count:failed}));throw new Error('Monitor operations incomplete');}
   const states=await batches(items,t=>target(env,t.id).status());
-  if(states.some(r=>r.status==='rejected'||(r.value.pendingCheck?Date.now()-r.value.pendingCheck.firstAt>90000:!r.value.checkedAt||Date.now()-r.value.checkedAt>25*60000)))throw new Error('Stale monitor results');
+  if(states.some(r=>r.status==='rejected'||(r.value.monitoringMode!=='active'?false:r.value.configurationError?true:r.value.pendingCheck?Date.now()-r.value.pendingCheck.firstAt>90000:!r.value.checkedAt||Date.now()-r.value.checkedAt>25*60000)))throw new Error('Stale monitor results');
 }
 async function runChecks(env,scheduledTime=Date.now()) {
   await directory(env).register(env.OWNER_ID);
@@ -388,6 +427,7 @@ export default {
     if(path.startsWith('/app/icons/')&&path.endsWith('.svg')){const key=path.slice('/app/icons/'.length,-4);if(Object.hasOwn(ICONS,key))return new Response(ICONS[key],{headers:{'Content-Type':'image/svg+xml','Link':'</app/icons/LICENSE.txt>; rel="license"','Cache-Control':'public,max-age=86400','X-Content-Type-Options':'nosniff'}});return new Response('Not found',{status:404});}
     if(path==='/app/icons.js')return new Response('export const ICONS = '+JSON.stringify(Object.fromEntries(Object.entries(ICONS).map(([key,svg])=>[key,Array.from(svg).reduce((hash,char)=>Math.imul(hash^char.charCodeAt(0),16777619)>>>0,2166136261).toString(36)]))),{headers:{'Content-Type':'text/javascript','Cache-Control':'no-cache'}});
     if(path==='/app/theme.js')return new Response('export const themeTokens = '+themeTokens.toString(),{headers:{'Content-Type':'text/javascript','Cache-Control':'no-cache'}});
+    if(path==='/app/settings-ui.js')return new Response(settingsUI,{headers:{'Content-Type':'text/javascript; charset=utf-8','Cache-Control':'no-cache'}});
     if(path==='/app/history-ui.js')return new Response(historyUI,{headers:{'Content-Type':'text/javascript; charset=utf-8','Cache-Control':'no-cache'}});
     if(path==='/app/client.js')return new Response(miniClient,{headers:{'Content-Type':'text/javascript; charset=utf-8','Cache-Control':'no-cache','X-Content-Type-Options':'nosniff'}});
     if(path==='/app/avatar.jpg')return new Response(Uint8Array.from(atob(avatar),c=>c.charCodeAt(0)),{headers:{'Content-Type':'image/jpeg','Cache-Control':'public,max-age=86400'}});
@@ -398,31 +438,36 @@ export default {
       let user;try{user=await authenticate(request.headers.get('Authorization')?.replace(/^tma /,''),env.TELEGRAM_BOT_TOKEN);}catch(e){return json({error:e.message},401);}
       // Bound input before parsing. Client never supplies the acting user ID.
       const reader=request.body?.getReader();if(!reader)return json({error:'Missing request'},400);
-      let size=0,chunks=[];while(true){const {done,value}=await reader.read();if(done)break;size+=value.byteLength;if(size>4096){await reader.cancel();return json({error:'Request too large'},413);}chunks.push(value);}
+      let size=0,chunks=[];while(true){const {done,value}=await reader.read();if(done)break;size+=value.byteLength;if(size>12288){await reader.cancel();return json({error:'Request too large'},413);}chunks.push(value);}
       let body;try{const bytes=new Uint8Array(size);let offset=0;for(const c of chunks){bytes.set(c,offset);offset+=c.length;}body=JSON.parse(new TextDecoder().decode(bytes));}catch{return json({error:'Invalid request'},400);}
-      if(!['dashboard','add','remove','onboard','history'].includes(body?.action))return json({error:'Unknown action'},400);
+      if(!['dashboard','add','remove','onboard','history','settings','updateSettings','usage'].includes(body?.action))return json({error:'Unknown action'},400);
       const config=forUser(env,user.id),reg=registry(config);await directory(env).register(user.id);await reg.initialize(user.id);await reg.seed();
       ctx.waitUntil(directory(env).enableMenu().catch(()=>console.error(JSON.stringify({event:'mini_menu_pending'}))));
       try{
-        if(body.action==='history'){
-          if(typeof body.id!=='string'||!['24h','7d','30d'].includes(body.range))throw new Error('Invalid history request');
+        if(body.action==='usage'){if(String(user.id)!==String(env.OWNER_ID))return json({error:'Owner only'},403);return json(await systemUsage(env));}
+        if(['history','settings','updateSettings'].includes(body.action)){
+          if(typeof body.id!=='string'||(body.action==='history'&&!['24h','7d','30d'].includes(body.range)))throw new Error('Invalid history request');
           const item=(await reg.list()).find(t=>t.id===body.id);
           if(!item)return json({error:'Monitor not found'},404);
-          return json(await target(config,item.id).history(body.range));
+          const stub=target(config,item.id);
+          if(body.action==='settings')return json(await stub.publicSettings());
+          if(body.action==='updateSettings')return json(await stub.updateSettings(body.settings));
+          return json(await stub.history(body.range));
         }
         if(body.action==='onboard'){await reg.completeOnboarding();return json({ok:true});}
         if(body.action==='add'){if(typeof body.url!=='string')throw new Error('Enter a URL or API endpoint.');return json({message:await reg.add(body.url)});}
         if(body.action==='remove'){if(typeof body.id!=='string'||body.id.length>50)throw new Error('Invalid monitor.');return json({message:await reg.remove(body.id)});}
         const key=periodKey(Date.now()),items=await reg.list(),targets=[];
-        const results=await batches(items,async t=>{const stub=target(config,t.id);const [state,stats]=await Promise.all([stub.status(),stub.stats(key)]);const v=viewState(state);targets.push({id:t.id,url:t.url,category:v.category,icon:v.icon,detail:v.detail||v.label,httpStatus:v.httpStatus||null,checkedAt:state.checkedAt||null,ms:state.ms??null,pendingAttempts:state.pendingCheck?.attempts||0,stats});});
+        const results=await batches(items,async t=>{const stub=target(config,t.id);const [state,stats]=await Promise.all([stub.status(),stub.stats(key)]);const v=viewState(state);targets.push({id:t.id,url:t.url,category:v.category,icon:v.icon,detail:v.detail||v.label,httpStatus:v.httpStatus||null,checkedAt:state.checkedAt||null,ms:state.ms??null,monitoringMode:state.monitoringMode,configurationError:state.configurationError||null,pendingAttempts:state.pendingCheck?.attempts||0,stats});});
         if(results.some(r=>r.status==='rejected'))return json({error:'Could not load all monitors. Try again.'},503);
         const order=new Map(items.map((t,i)=>[t.id,i]));targets.sort((a,b)=>order.get(a.id)-order.get(b.id));
-        return json({user,targets,summary:dashboardSummary(targets),onboardingComplete:await reg.onboarded(),window:periodBounds(key)});
+        return json({user,isOwner:String(user.id)===String(env.OWNER_ID),targets,summary:dashboardSummary(targets),onboardingComplete:await reg.onboarded(),window:periodBounds(key)});
       }catch(e){return json({error:e.message},400);}
     }
     if(path==='/health'&&request.method==='GET') return Response.json({service:'Payo ⚡️',ok:true,reportTime:'18:00',reportTimezone:'Asia/Tehran',reportCron:'30 14 * * *',weeklyReportTime:'Friday 00:00',weeklyReportTimezone:'Asia/Tehran',weeklyReportCron:'30 20 * * THU'});
     if(path.startsWith('/admin/')) {
       if(!await equalSecret(request.headers.get('Authorization'),`Bearer ${env.ADMIN_SECRET}`)||!env.ADMIN_SECRET) return new Response('Unauthorized',{status:401});
+      if(path==='/admin/usage'&&request.method==='GET')return Response.json(await systemUsage(env),{headers:{'Cache-Control':'no-store'}});
       if(path==='/admin/system'&&request.method==='GET')return Response.json(await directory(env).systemStatus(),{headers:{'Cache-Control':'no-store'}});
       if(path==='/admin/watchdog'&&request.method==='POST') {try{const body=await request.json();if(typeof body.url!=='string'||body.url.length>120)throw new Error('Invalid ping URL');await directory(env).configureWatchdog(body.url);return Response.json({ok:true});}catch{return Response.json({error:'Use a Healthchecks.io HTTPS UUID ping URL.'},{status:400});}}
       if(path==='/admin/setup'&&request.method==='POST') {await directory(env).register(env.OWNER_ID);await registry(env).initialize(env.OWNER_ID);await registry(env).seed();return Response.json({count:(await registry(env).list()).length});}

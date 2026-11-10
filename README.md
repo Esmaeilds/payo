@@ -9,13 +9,13 @@ A Telegram bot and Mini App for monitoring website URLs and public HTTP GET API 
 - Each Telegram user gets a private monitoring list.
 - Checks run every 10 minutes from Cloudflare, outside the monitored server.
 - No-response failures get two additional attempts, 10 seconds after each failure.
-- Orange service errors and confirmed red no-response results trigger private Telegram alerts on category changes. Unchanged incidents do not repeat; recovery notifications are disabled.
+- Orange service errors and confirmed red no-response results trigger private Telegram alerts on category changes. Unchanged incidents do not repeat; recovery notifications are off by default and can be enabled per monitor.
 - Daily reports arrive at 18:00 Tehran time, with per-address sampled uptime and coverage.
 - Weekly reports arrive Friday at 00:00 Tehran (Thursday 20:30 UTC), covering the preceding Friday 00:00 through the current Friday 00:00.
 - The Mini App includes Home, Reports and Learn, and follows Telegram theme settings.
 - Owner-only `/stats` shows registered users, active users and the total number of URLs & APIs across all lists.
 
-Public APIs here means HTTP GET endpoints. Authenticated APIs, custom headers, request bodies and content assertions are not implemented.
+Public APIs here means HTTP GET endpoints. Monitor Settings supports expected status codes/ranges, bounded text/JSON assertions, and encrypted HTTPS Bearer/custom headers. Request methods remain GET; request bodies and state-changing requests are not supported.
 
 ## Build your own
 
@@ -49,7 +49,7 @@ Register Telegram's webhook at `https://YOUR_WORKER.workers.dev/telegram` using 
 
 One Worker handles Telegram webhooks, the Mini App and scheduled events. SQLite Durable Objects store the directory, per-user registries and individual targets. Retry state and report outboxes persist across restarts. Telegram initData is validated on the server before selecting a user's private list.
 
-HTTP 200 counts as healthy. Uptime is successful recorded samples divided by all recorded samples; missing checks are excluded, and incomplete coverage is shown. It is not a continuous measurement or a multi-region SLA. See [status classification](CLASSIFICATION.md).
+The configured status and optional content condition define health; HTTP 200 is the default. Uptime is successful recorded samples divided by all recorded samples; missing checks are excluded, and incomplete coverage is shown. It is not a continuous measurement or a multi-region SLA. See [status classification](CLASSIFICATION.md).
 
 Cloudflare Free has shared resource limits. This repository does not promise unlimited users, a fixed URL capacity or perpetual zero cost. Check current quotas and usage before scaling; no paid plan is required by the intended architecture.
 
@@ -92,3 +92,13 @@ Home monitor details and Reports show saved response-time history, the last 30 s
 History starts with this release. Details are retained for seven days and hourly aggregates for thirty days, with housekeeping once per active target per UTC day. Daily/weekly report counters remain independent. No response bodies or additional endpoint requests are used. Viewing Reports loads history only for the selected monitor; Home does not fetch it in the background.
 
 The owner-only `/stats` command includes completed checks and attempts from currently listed monitors over the last 24 hours, additional retry attempts and retained sample counts. These are application counters, not Cloudflare billed usage: pending attempts, deleted targets, redirect hops and platform operations are excluded. They cannot establish a supported URL capacity. History adds storage writes and reads within the existing free-plan architecture; benchmark actual platform usage before scaling. No paid service or new binding is required.
+
+## Monitor controls and API health checks
+
+Open a monitor in Home, then Settings. Choose a success status (for example 204 or 200-299), an optional text match or JSON scalar equality using a dot-separated path, and optional recovery notifications. Historical samples preserve their original policy. Text/JSON bodies are streamed with a 64 KiB limit and never retained; oversized or nonmatching bodies fail the content check. Only GET requests are issued.
+
+Pause stops checking indefinitely. Maintenance lasts up to seven days and resumes at the first 10-minute cycle after its end. Neither records successful checks while suspended. Configuration changes cancel pending retries and queued old alerts. In-flight results from an older configuration cannot overwrite new settings. Recovery notifications only follow orange/red observations, are off by default and are suppressed across planned suspension.
+
+HTTPS monitors may use a Bearer token and up to eight Authorization, Accept or X- headers. All supplied headers are encrypted with AES-256-GCM using a domain-separated HKDF key derived from the existing ADMIN_SECRET and bound to the target/owner/URL. Stored values are write-only through the App: blank fields keep existing credentials, replacement overwrites the set, and Remove stored credentials deletes it. Same-origin redirects are supported; authenticated requests never follow cross-origin or HTTPS-to-HTTP redirects. URLs and response bodies must not contain credentials. Rotating ADMIN_SECRET requires re-entering API credentials; never lose/rotate it without planning this recovery. Encryption protects stored credentials, not against a compromised Worker with access to its secrets.
+
+The bot owner's Reports page has System usage with seven-day application trends. Other users cannot read this endpoint. These counts exclude pending checks, removed monitors, redirects and platform overhead. `node scripts/cloudflare-usage.mjs` separately reads account-wide Cloudflare analytics with an analytics-readable token supplied only through environment variables; it prints no account ID or token. Provider dataset availability, sampling, free-plan retention and permissions can limit this query. CPU metrics are not billed duration, and these datasets do not cover every free quota. A seven-day capacity conclusion requires seven full days of actual observations plus Cloudflare quota measurements; no new capacity is promised.
