@@ -272,45 +272,7 @@ export class Target extends DurableObject {
   }
   status() {const data=JSON.parse(this.sql.exec('SELECT data FROM state WHERE id=1').toArray()[0]?.data || '{}');return {...data,monitoringMode:monitoringMode(this.settings())};}
   save(data) {this.sql.exec('INSERT OR REPLACE INTO state VALUES (1,?)',JSON.stringify(data));}
-  async refreshFavicon() {
-    const previous = await this.ctx.storage.get('favicon');
-    if (previous && previous.until > Date.now()) return previous.image;
-    if (!this.iconRequest) this.iconRequest = this.readFavicon().finally(() => { this.iconRequest = null; });
-    return this.iconRequest;
-  }
-  async homeSummary(key) {
-    const state = this.status();
-    const cached = await this.ctx.storage.get('favicon');
-    if (!cached || cached.until <= Date.now()) this.ctx.waitUntil(this.refreshFavicon());
-    return {state, stats:this.stats(key), favicon:cached?.image || null};
-  }
-  async readFavicon() {
-    const state = this.status();
-    if (!state.enabled || !state.url) return null;
-    let image = null;
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 2500);
-    try {
-      const response = await fetch(new URL('/favicon.ico', state.url), {
-        redirect: 'error', credentials: 'omit', signal: controller.signal
-      });
-      const type = response.headers.get('content-type')?.split(';')[0].trim().toLowerCase();
-      if (response.ok && ['image/x-icon','image/vnd.microsoft.icon','image/png','image/webp','image/jpeg'].includes(type)) {
-        const reader = response.body.getReader();
-        let binary = '';
-        while (true) {
-          const {value, done} = await reader.read();
-          if (done) { if (binary) image = 'data:' + type + ';base64,' + btoa(binary); break; }
-          if (binary.length + value.length > 16384) break;
-          binary += String.fromCharCode(...value);
-        }
-      }
-    } catch { /* Icons are optional. Monitoring continues independently. */ }
-    finally { clearTimeout(timeout); controller.abort(); }
-    await this.ctx.storage.put('favicon', {image, until: Date.now() + (image ? 7 : 1) * 86400000});
-    return image;
-  }
-  configure(url,ownerId=this.env.OWNER_ID) {const state=this.status();if(state.ownerId && state.ownerId!==String(ownerId))throw new Error('Owner mismatch');if(!state.url){this.save({url,ownerId:String(ownerId),enabled:true,status:'unknown'});this.ctx.waitUntil(this.refreshFavicon());}else if(!state.ownerId)this.save({...state,ownerId:String(ownerId)});}
+  configure(url,ownerId=this.env.OWNER_ID) {const state=this.status();if(state.ownerId && state.ownerId!==String(ownerId))throw new Error('Owner mismatch');if(!state.url)this.save({url,ownerId:String(ownerId),enabled:true,status:'unknown'});else if(!state.ownerId)this.save({...state,ownerId:String(ownerId)});}
   stats(key) {periodBounds(key);return this.sql.exec('SELECT total,up,outages,notice,warning,error,unreachable FROM daily_1800 WHERE period=?',key).toArray()[0] || {total:0,up:0,outages:0,notice:0,warning:0,error:0,unreachable:0};}
   weeklyStats(key) {weeklyPeriodBounds(key);return this.sql.exec('SELECT total,up,outages,notice,warning,error,unreachable FROM weekly WHERE period=?',key).toArray()[0] || {total:0,up:0,outages:0,notice:0,warning:0,error:0,unreachable:0};}
   settingsRaw(){return this.sql.exec('SELECT data FROM monitor_settings WHERE id=1').toArray()[0]?.data||'{}';}
@@ -459,7 +421,7 @@ export default {
   async scheduled(event,env,ctx) {ctx.waitUntil(runChecks(env,event.scheduledTime));},
   async fetch(request,env,ctx) {
     const path=new URL(request.url).pathname;
-    if(path==='/app'||path==='/app/')return new Response(miniHTML,{headers:{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-cache','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer','Content-Security-Policy':"default-src 'self'; script-src 'self' https://telegram.org; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self'; base-uri 'none'; form-action 'self'"}});
+    if(path==='/app'||path==='/app/')return new Response(miniHTML,{headers:{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-cache','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer','Content-Security-Policy':"default-src 'self'; script-src 'self' https://telegram.org; style-src 'self' 'unsafe-inline'; img-src 'self' https:; connect-src 'self'; base-uri 'none'; form-action 'self'"}});
     if(path==='/app/roboto.woff2')return new Response(Uint8Array.from(atob(fontData),c=>c.charCodeAt(0)),{headers:{'Content-Type':fontMime,'Cache-Control':'public,max-age=604800'}});
     if(path==='/app/icons/LICENSE.txt')return new Response(iconLicense,{headers:{'Content-Type':'text/plain; charset=utf-8','Cache-Control':'public,max-age=86400'}});
     if(path.startsWith('/app/icons/')&&path.endsWith('.svg')){const key=path.slice('/app/icons/'.length,-4);if(Object.hasOwn(ICONS,key))return new Response(ICONS[key],{headers:{'Content-Type':'image/svg+xml','Link':'</app/icons/LICENSE.txt>; rel="license"','Cache-Control':'public,max-age=86400','X-Content-Type-Options':'nosniff'}});return new Response('Not found',{status:404});}
@@ -496,7 +458,7 @@ export default {
         if(body.action==='add'){if(typeof body.url!=='string')throw new Error('Enter a URL or API endpoint.');return json({message:await reg.add(body.url)});}
         if(body.action==='remove'){if(typeof body.id!=='string'||body.id.length>50)throw new Error('Invalid monitor.');return json({message:await reg.remove(body.id)});}
         const key=periodKey(Date.now()),items=await reg.list(),targets=[];
-        const results=await batches(items,async t=>{const stub=target(config,t.id);const {state,stats,favicon}=await stub.homeSummary(key);const v=viewState(state);targets.push({id:t.id,url:t.url,favicon,category:v.category,icon:v.icon,detail:v.detail||v.label,httpStatus:v.httpStatus||null,checkedAt:state.checkedAt||null,ms:state.ms??null,monitoringMode:state.monitoringMode,configurationError:state.configurationError||null,pendingAttempts:state.pendingCheck?.attempts||0,stats});});
+        const results=await batches(items,async t=>{const stub=target(config,t.id);const [state,stats]=await Promise.all([stub.status(),stub.stats(key)]);const v=viewState(state);targets.push({id:t.id,url:t.url,category:v.category,icon:v.icon,detail:v.detail||v.label,httpStatus:v.httpStatus||null,checkedAt:state.checkedAt||null,ms:state.ms??null,monitoringMode:state.monitoringMode,configurationError:state.configurationError||null,pendingAttempts:state.pendingCheck?.attempts||0,stats});});
         if(results.some(r=>r.status==='rejected'))return json({error:'Could not load all monitors. Try again.'},503);
         const order=new Map(items.map((t,i)=>[t.id,i]));targets.sort((a,b)=>order.get(a.id)-order.get(b.id));
         return json({user,isOwner:String(user.id)===String(env.OWNER_ID),targets,summary:dashboardSummary(targets),onboardingComplete:await reg.onboarded(),window:periodBounds(key)});
