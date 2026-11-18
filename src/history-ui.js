@@ -10,9 +10,20 @@ export function historyPanel(api,monitors,initialId,lazy=false){
  const ranges=make('div',undefined,'history-ranges');ranges.setAttribute('role','group');ranges.setAttribute('aria-label','History range');
  let range='24h',version=0;const content=make('div');
  const buttons=['24h','7d','30d'].map(value=>{const b=make('button',value.toUpperCase());b.onclick=()=>{range=value;void load();};ranges.append(b);return b;});
- controls.append(select,ranges);root.append(controls,content);select.onchange=()=>void load();
- async function load(){const ticket=++version;buttons.forEach((b,i)=>{const active=['24h','7d','30d'][i]===range;b.classList.toggle('active',active);b.setAttribute('aria-pressed',String(active));});content.replaceChildren(make('p','Loading saved history…'));if(!select.value)return;
+ controls.append(ranges);root.append(controls,content);select.onchange=()=>void load();
+ async function load(){const ticket=++version;buttons.forEach((b,i)=>{const active=['24h','7d','30d'][i]===range;b.classList.toggle('active',active);b.setAttribute('aria-pressed',String(active));});content.replaceChildren(make('h3','Response time'),make('div',undefined,'loading-chart'),checkTable([]),make('p','Loading saved history…'));if(!select.value)return;
  try{const data=await api('history',{id:select.value,range});if(ticket!==version)return;draw(data);}catch{if(ticket!==version)return;const b=make('button','Try again');b.onclick=()=>void load();content.replaceChildren(make('p','Could not load saved history.'),b);}}
+ function checkTable(points){
+  const table=make('table',undefined,'recent-table');table.append(make('caption','Recent checks · last 30 slots'));
+  const head=table.createTHead().insertRow();
+  for(const name of ['Time','Result','HTTP','Duration'])head.append(make('th',name));
+  const body=table.createTBody();
+  for(const p of points.slice().reverse()){
+   const row=body.insertRow();
+   for(const value of [time(p.at),labels[p.category],p.http??'—',p.ms===null?'—':duration(p.ms)])row.insertCell().textContent=value;
+  }
+  return table;
+ }
  function draw(data){
  content.replaceChildren();const stats=make('div',undefined,'history-stats');for(const [title,value] of [['Observed uptime',data.summary.uptime===null?'No data':data.summary.uptime.toFixed(2)+'%'],['Average response',duration(data.summary.averageMs)],['Coverage',data.summary.total+' / '+data.summary.expected]]){const s=make('div');s.append(make('small',title),make('strong',value));stats.append(s);}content.append(stats,make('p','Latest HTTP response: '+duration(data.latest.ms)+(data.latest.at?' · '+time(data.latest.at):''),'note')); 
  const heading=make('h3','Response time');content.append(heading,make('p',data.resolution,'note'));
@@ -30,7 +41,7 @@ export function historyPanel(api,monitors,initialId,lazy=false){
  }
  content.append(make('h3','Recent checks'),make('p','Last 30 scheduled slots · 10 minutes each · '+time(data.recent[0].at)+' – '+time(data.recent.at(-1).at),'note'));
  const strip=make('div',undefined,'heartbeat-strip'),readout=make('p','Tap a bar to inspect its result.','note');
- for(const p of data.recent){const b=make('button',undefined,'heartbeat '+p.category),description=time(p.at)+' · '+labels[p.category]+(p.http?' · HTTP '+p.http:'')+' · '+duration(p.ms)+(p.attempts?' · '+p.attempts+' attempt(s)':'');b.setAttribute('aria-label',description);b.title=description;b.onclick=()=>{readout.textContent=description;};strip.append(b);}content.append(strip,readout);
+ for(const p of data.recent){const b=make('button',undefined,'heartbeat '+p.category),description=time(p.at)+' · '+labels[p.category]+(p.http?' · HTTP '+p.http:'')+' · '+duration(p.ms)+(p.attempts?' · '+p.attempts+' attempt(s)':'');b.setAttribute('aria-label',description);b.title=description;b.onclick=()=>{readout.textContent=description;};strip.append(b);}content.append(strip,readout,checkTable(data.recent));
  content.append(make('h3','Incidents'),make('p','Orange and red observations · Detailed history available for 7 days.','note'));
  if(!data.incidents.length)content.append(make('p','No recorded orange or red incidents in the available detailed history.','history-empty'));
  for(const incident of data.incidents){const row=make('div',undefined,'incident-row');row.append(make('strong',labels[incident.category]+(incident.http?' · HTTP '+incident.http:'')),make('p','First observed in retained history '+time(incident.start)+(incident.end?' · Left this status '+time(incident.end):incident.ongoing?' · Still observed':' · End not observed')),make('small',incident.end?'Observed interval: '+Math.round((incident.end-incident.start)/60000)+' min':'Last observed '+time(incident.lastObserved)));content.append(row);}
